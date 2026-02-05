@@ -11,7 +11,8 @@ const STATE_FILE = path.join(DATA_DIR, "loom-state.json");
 const RECEIPTS_FILE = path.join(DATA_DIR, "publish-receipts.jsonl");
 
 // --- Cooldown configuration (from doctrine P3) ---
-const COOLDOWNS = {
+// Defaults - can be overridden at runtime
+const DEFAULT_COOLDOWNS = {
   post: {
     minIntervalMs: 4 * 60 * 60 * 1000, // 4 hours
     maxPerDay: 3,
@@ -21,6 +22,9 @@ const COOLDOWNS = {
     maxPerDay: 30,
   },
 };
+
+// Runtime-configurable cooldowns
+let COOLDOWNS = { ...DEFAULT_COOLDOWNS };
 
 // --- Types ---
 
@@ -45,7 +49,14 @@ export interface PublishReceipt {
   submolt?: string;
   title?: string;
   contentPreview?: string;
-  reason?: string; // For abstain
+  reason?: string; // For abstain - why Loom chose not to act
+  justification?: {
+    // For posts/comments - the reasoning behind the decision
+    claim?: string; // Core assertion
+    whyNow?: string; // Timing justification
+    uncertainty?: string; // Biggest weakness
+    falsifier?: string; // What would change this view
+  };
   success: boolean;
   error?: string;
   autonomous?: boolean; // True if action was taken autonomously
@@ -251,4 +262,62 @@ export function getStateStatus(): {
     commentCooldown: checkCommentCooldown(),
     stopActive: state.stopUntil !== null && new Date(state.stopUntil).getTime() > Date.now(),
   };
+}
+
+// --- Cooldown configuration ---
+
+export interface CooldownConfig {
+  post: { minIntervalMs: number; maxPerDay: number };
+  comment: { minIntervalMs: number; maxPerDay: number };
+}
+
+/**
+ * Get current cooldown configuration.
+ */
+export function getCooldowns(): CooldownConfig {
+  return { ...COOLDOWNS };
+}
+
+/**
+ * Set post cooldown interval in minutes.
+ */
+export function setPostCooldownMinutes(minutes: number): void {
+  if (minutes < 1) minutes = 1;
+  COOLDOWNS.post.minIntervalMs = minutes * 60 * 1000;
+  console.log(`state: post cooldown set to ${minutes}m`);
+}
+
+/**
+ * Set post daily limit.
+ */
+export function setPostDailyLimit(limit: number): void {
+  if (limit < 1) limit = 1;
+  COOLDOWNS.post.maxPerDay = limit;
+  console.log(`state: post daily limit set to ${limit}`);
+}
+
+/**
+ * Set comment cooldown interval in minutes.
+ */
+export function setCommentCooldownMinutes(minutes: number): void {
+  if (minutes < 0) minutes = 0;
+  COOLDOWNS.comment.minIntervalMs = minutes * 60 * 1000;
+  console.log(`state: comment cooldown set to ${minutes}m`);
+}
+
+/**
+ * Set comment daily limit.
+ */
+export function setCommentDailyLimit(limit: number): void {
+  if (limit < 1) limit = 1;
+  COOLDOWNS.comment.maxPerDay = limit;
+  console.log(`state: comment daily limit set to ${limit}`);
+}
+
+/**
+ * Reset cooldowns to defaults.
+ */
+export function resetCooldowns(): void {
+  COOLDOWNS = { ...DEFAULT_COOLDOWNS };
+  console.log("state: cooldowns reset to defaults");
 }

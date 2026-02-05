@@ -23,7 +23,9 @@ The doctrine is compiled into the system prompt at startup. DISCORD.md is append
 - **Thread tracking** — follows posts Loom has engaged with, checks for new replies
 - **Reputation tracking** — monitors upvotes/downvotes, feeds back into decision-making
 - **Operator alerts** — DMs you when posts get replies, gain traction, or Loom acts autonomously
-- **Cooldown enforcement** — respects rate limits per doctrine (posts: 6h/2 per day, comments: 10m/12 per day)
+- **Cooldown enforcement** — respects rate limits per doctrine (posts: 4h/3 per day, comments: 5m/30 per day)
+- **Configurable cooldowns** — adjust rate limits via Discord commands
+- **Web dashboard** — browse memory, timeline, analytics, and decision logs
 - **Persistent state** — tracks activity, cooldowns, memory, and receipts across restarts
 - **Configurable LLM** — supports OpenAI (gpt-5-mini) or Anthropic (claude-sonnet-4)
 
@@ -109,14 +111,23 @@ Loom responds to DMs and @mentions. Special commands:
 - `alerts on` / `enable alerts` — enable operator DM alerts
 - `alerts off` / `disable alerts` — disable operator DM alerts
 
+### Cooldown Configuration
+- `set post cooldown 2h` / `post cooldown 120m` — set minimum time between posts
+- `set comment cooldown 5m` — set minimum time between comments
+- `set post limit 5` — set maximum posts per day
+- `set comment limit 20` — set maximum comments per day
+- `reset cooldowns` — restore default cooldown settings
+
 ## Operator Alerts
 
 When `OPERATOR_DISCORD_ID` is set, Loom will DM you about:
 - 💬 Direct replies to Loom's comments (with content preview)
 - 📈 Posts gaining traction (5+ upvotes)
 - 🚀 Posts with significant traction (10+ upvotes)
-- 📝 Autonomous posts Loom creates (with content preview)
-- 💬 Autonomous comments Loom makes (with content preview)
+- 📝 Autonomous posts Loom creates (with content preview, .md attachment for long content)
+- 💬 Autonomous comments Loom makes (with content preview, .md attachment for long content)
+
+Long responses (>2000 chars) and autonomous actions (>1500 chars) are attached as .md files for full context.
 
 ## Health Check
 
@@ -138,17 +149,23 @@ Returns:
 
 ## Dashboard
 
-Web-based memory browser and timeline viewer:
+Web-based memory browser and analytics dashboard:
 
 ```
 https://your-app.fly.dev/dashboard
 ```
 
 Features:
-- **Timeline** — Chronological view of posts, comments, and observations
-- **Memory browser** — View all posts and comments written
+- **Timeline** — Chronological view of posts, comments, and observations (click to view full content)
+- **Memory browser** — View all posts and comments written (click to expand)
 - **Threads** — Track engaged threads and their stats
 - **Observations** — Browse notes Loom has made about interesting posts
+- **Decisions** — View all publish decisions including abstain reasons
+- **Analytics** — Charts and visualizations:
+  - Activity over time (7-day bar chart)
+  - Decision distribution (action vs abstain)
+  - Top posts by reputation
+  - Most frequent topics
 - **Search** — Filter memory by keyword
 
 API endpoints:
@@ -157,6 +174,8 @@ API endpoints:
 - `GET /api/search?q=query` — Search memory
 - `GET /api/state` — Current state and stats
 - `GET /api/receipts?limit=50` — Publish receipts
+- `GET /api/entry/:id` — Get single entry with full content
+- `GET /api/analytics` — Analytics data (activity, reputation, topics)
 
 ## Discord Setup
 

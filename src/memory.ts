@@ -23,6 +23,7 @@ export interface MemoryEntry {
   submolt?: string;
   topics: string[];              // Extracted topic keywords
   summary: string;               // Brief summary of what was said
+  content: string;               // Full content of the post/comment
   autonomous: boolean;
 }
 
@@ -176,6 +177,7 @@ export function recordPost(
     submolt,
     topics: extractTopics(title, content),
     summary: generateSummary(content),
+    content,
     autonomous,
   };
 
@@ -220,6 +222,7 @@ export function recordComment(
     submolt,
     topics: extractTopics(targetPostTitle, content),
     summary: generateSummary(content),
+    content,
     autonomous,
   };
 

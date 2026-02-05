@@ -14,6 +14,12 @@ import {
   appendReceipt,
   getStateStatus,
   getRecentReceipts,
+  getCooldowns,
+  setPostCooldownMinutes,
+  setPostDailyLimit,
+  setCommentCooldownMinutes,
+  setCommentDailyLimit,
+  resetCooldowns,
   type PublishReceipt,
 } from "./state.js";
 import {
@@ -201,6 +207,13 @@ function formatCommandsHelp(): string {
 • \`check moltbook\` — trigger immediate check
 • \`set interval [N]\` — set check interval (minutes)
 
+⏱️ **Cooldowns**
+• \`set post cooldown [N]h\` or \`[N]m\` — set post interval
+• \`set comment cooldown [N]m\` — set comment interval
+• \`set post limit [N]\` — daily post limit
+• \`set comment limit [N]\` — daily comment limit
+• \`reset cooldowns\` — restore defaults
+
 🔔 **Alerts**
 • \`alerts on\` — enable operator DM alerts
 • \`alerts off\` — disable operator DM alerts
@@ -340,11 +353,48 @@ function formatMemoryReport(): string {
 }
 
 /**
- * Check if message is an autonomous mode command.
- * Returns the command type and optional parameter.
+ * Check if message is an autonomous mode or config command.
+ * Returns the command type and optional parameters.
  */
-function parseAutonomousCommand(text: string): { cmd: "start" | "stop" | "check" | "status" | "interval" | "alerts_on" | "alerts_off"; param?: number } | null {
+type CommandType = "start" | "stop" | "check" | "status" | "interval" | "alerts_on" | "alerts_off" |
+  "post_cooldown" | "comment_cooldown" | "post_limit" | "comment_limit" | "reset_cooldowns";
+
+function parseAutonomousCommand(text: string): { cmd: CommandType; param?: number } | null {
   const lower = text.toLowerCase().trim();
+
+  // Cooldown commands
+  // e.g., "set post cooldown 2h", "post cooldown 120m", "post cooldown 2 hours"
+  const postCooldownMatch = lower.match(/(?:set\s+)?post\s+cooldown\s+(\d+)\s*(h|hours?|m|mins?|minutes?)?/);
+  if (postCooldownMatch) {
+    let minutes = parseInt(postCooldownMatch[1], 10);
+    const unit = postCooldownMatch[2] || "m";
+    if (unit.startsWith("h")) minutes *= 60;
+    return { cmd: "post_cooldown", param: minutes };
+  }
+
+  // e.g., "set comment cooldown 5m", "comment cooldown 10 minutes"
+  const commentCooldownMatch = lower.match(/(?:set\s+)?comment\s+cooldown\s+(\d+)\s*(m|mins?|minutes?)?/);
+  if (commentCooldownMatch) {
+    const minutes = parseInt(commentCooldownMatch[1], 10);
+    return { cmd: "comment_cooldown", param: minutes };
+  }
+
+  // e.g., "set post limit 5", "post limit 3"
+  const postLimitMatch = lower.match(/(?:set\s+)?post\s+limit\s+(\d+)/);
+  if (postLimitMatch) {
+    return { cmd: "post_limit", param: parseInt(postLimitMatch[1], 10) };
+  }
+
+  // e.g., "set comment limit 20", "comment limit 15"
+  const commentLimitMatch = lower.match(/(?:set\s+)?comment\s+limit\s+(\d+)/);
+  if (commentLimitMatch) {
+    return { cmd: "comment_limit", param: parseInt(commentLimitMatch[1], 10) };
+  }
+
+  // Reset cooldowns
+  if (/^reset\s+cooldowns?$/i.test(lower)) {
+    return { cmd: "reset_cooldowns" };
+  }
 
   // Start commands
   if (/^(start|enable|begin)\s+(autonomous|auto|autonomy)/.test(lower) ||
@@ -1055,6 +1105,55 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
           const report = formatStatusReport();
           await message.reply({ content: report });
           console.log(`discord: sent status report (autonomous) to msg=${message.id}`);
+          return;
+
+        case "post_cooldown":
+          if (autoCmd.param && autoCmd.param >= 1) {
+            setPostCooldownMinutes(autoCmd.param);
+            const hours = Math.floor(autoCmd.param / 60);
+            const mins = autoCmd.param % 60;
+            const timeStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+            await message.reply({ content: `⏱️ Post cooldown set to ${timeStr}.` });
+          } else {
+            await message.reply({ content: "Invalid value. Please specify minutes >= 1." });
+          }
+          console.log(`discord: post cooldown set to ${autoCmd.param}m from msg=${message.id}`);
+          return;
+
+        case "comment_cooldown":
+          if (autoCmd.param !== undefined && autoCmd.param >= 0) {
+            setCommentCooldownMinutes(autoCmd.param);
+            await message.reply({ content: `⏱️ Comment cooldown set to ${autoCmd.param}m.` });
+          } else {
+            await message.reply({ content: "Invalid value. Please specify minutes >= 0." });
+          }
+          console.log(`discord: comment cooldown set to ${autoCmd.param}m from msg=${message.id}`);
+          return;
+
+        case "post_limit":
+          if (autoCmd.param && autoCmd.param >= 1) {
+            setPostDailyLimit(autoCmd.param);
+            await message.reply({ content: `📊 Daily post limit set to ${autoCmd.param}.` });
+          } else {
+            await message.reply({ content: "Invalid value. Please specify a limit >= 1." });
+          }
+          console.log(`discord: post limit set to ${autoCmd.param} from msg=${message.id}`);
+          return;
+
+        case "comment_limit":
+          if (autoCmd.param && autoCmd.param >= 1) {
+            setCommentDailyLimit(autoCmd.param);
+            await message.reply({ content: `📊 Daily comment limit set to ${autoCmd.param}.` });
+          } else {
+            await message.reply({ content: "Invalid value. Please specify a limit >= 1." });
+          }
+          console.log(`discord: comment limit set to ${autoCmd.param} from msg=${message.id}`);
+          return;
+
+        case "reset_cooldowns":
+          resetCooldowns();
+          await message.reply({ content: "⏱️ Cooldowns reset to defaults (post: 4h/3 per day, comment: 5m/30 per day)." });
+          console.log(`discord: cooldowns reset from msg=${message.id}`);
           return;
       }
     }

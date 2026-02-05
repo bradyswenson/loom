@@ -19,6 +19,7 @@ function buildTimeline(memory: LoomMemory, limit: number = 50): Array<{
   title: string;
   content?: string;
   postId?: string;
+  entryId?: string;
   submolt?: string;
   autonomous?: boolean;
 }> {
@@ -28,6 +29,7 @@ function buildTimeline(memory: LoomMemory, limit: number = 50): Array<{
     title: string;
     content?: string;
     postId?: string;
+    entryId?: string;
     submolt?: string;
     autonomous?: boolean;
   }> = [];
@@ -41,6 +43,7 @@ function buildTimeline(memory: LoomMemory, limit: number = 50): Array<{
         title: entry.title || "Untitled",
         content: entry.summary?.slice(0, 200),
         postId: entry.id,
+        entryId: entry.id,
         submolt: entry.submolt,
         autonomous: entry.autonomous,
       });
@@ -51,6 +54,7 @@ function buildTimeline(memory: LoomMemory, limit: number = 50): Array<{
         title: `Comment on: ${entry.targetPostTitle || "Unknown"}`,
         content: entry.summary?.slice(0, 200),
         postId: entry.targetPostId,
+        entryId: entry.id,
         submolt: entry.submolt,
         autonomous: entry.autonomous,
       });
@@ -281,6 +285,124 @@ function getDashboardHTML(): string {
 
     /* Loading */
     .loading { text-align: center; padding: 40px; color: #8b949e; }
+
+    /* Clickable items */
+    .memory-item.clickable, .event.clickable { cursor: pointer; transition: border-color 0.2s; }
+    .memory-item.clickable:hover, .event.clickable:hover { border-color: #58a6ff; }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.8);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      max-width: 800px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      padding: 25px;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 15px;
+    }
+    .modal-title { font-size: 1.2rem; font-weight: 600; color: #58a6ff; }
+    .modal-close {
+      background: none;
+      border: none;
+      color: #8b949e;
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+    .modal-close:hover { color: #c9d1d9; }
+    .modal-meta { font-size: 0.85rem; color: #8b949e; margin-bottom: 15px; }
+    .modal-content {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 15px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    /* Analytics */
+    .chart-container {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .chart-title { font-size: 1rem; font-weight: 600; margin-bottom: 15px; color: #c9d1d9; }
+    .bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 150px; }
+    .bar-group { display: flex; flex-direction: column; align-items: center; flex: 1; }
+    .bar {
+      width: 100%;
+      min-height: 4px;
+      background: #58a6ff;
+      border-radius: 4px 4px 0 0;
+      transition: height 0.3s;
+    }
+    .bar.comments { background: #a371f7; }
+    .bar.observations { background: #f0883e; }
+    .bar-label { font-size: 0.7rem; color: #6e7681; margin-top: 5px; }
+    .pie-chart { display: flex; gap: 20px; align-items: center; }
+    .pie-visual { width: 100px; height: 100px; border-radius: 50%; }
+    .pie-legend { font-size: 0.85rem; }
+    .pie-legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .pie-legend-color { width: 12px; height: 12px; border-radius: 2px; }
+    .ranking-list { display: flex; flex-direction: column; gap: 8px; }
+    .ranking-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #0d1117;
+      border-radius: 4px;
+    }
+    .ranking-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ranking-value { color: #58a6ff; font-weight: 500; margin-left: 10px; }
+
+    /* Decisions/Receipts */
+    .decision-item {
+      padding: 12px 15px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      border-left: 3px solid #30363d;
+      margin-bottom: 10px;
+    }
+    .decision-item.post { border-left-color: #58a6ff; }
+    .decision-item.comment { border-left-color: #a371f7; }
+    .decision-item.abstain { border-left-color: #f0883e; }
+    .decision-item.failed { border-left-color: #f85149; }
+    .decision-header { display: flex; justify-content: space-between; margin-bottom: 5px; }
+    .decision-action {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 500;
+    }
+    .decision-item.post .decision-action { background: #1f3a5f; color: #58a6ff; }
+    .decision-item.comment .decision-action { background: #2d2259; color: #a371f7; }
+    .decision-item.abstain .decision-action { background: #3d2d1f; color: #f0883e; }
+    .decision-item.failed .decision-action { background: #3d1f1f; color: #f85149; }
+    .decision-time { font-size: 0.8rem; color: #8b949e; }
+    .decision-title { font-weight: 500; margin-bottom: 4px; }
+    .decision-reason { font-size: 0.85rem; color: #8b949e; font-style: italic; }
+    .decision-meta { font-size: 0.8rem; color: #6e7681; margin-top: 5px; }
   </style>
 </head>
 <body>
@@ -300,6 +422,8 @@ function getDashboardHTML(): string {
       <button class="tab" data-tab="memory">Memory</button>
       <button class="tab" data-tab="threads">Threads</button>
       <button class="tab" data-tab="observations">Observations</button>
+      <button class="tab" data-tab="decisions">Decisions</button>
+      <button class="tab" data-tab="analytics">Analytics</button>
     </div>
 
     <div id="content">
@@ -315,6 +439,24 @@ function getDashboardHTML(): string {
       <div class="panel" id="observations-panel">
         <div class="loading">Loading observations...</div>
       </div>
+      <div class="panel" id="decisions-panel">
+        <div class="loading">Loading decisions...</div>
+      </div>
+      <div class="panel" id="analytics-panel">
+        <div class="loading">Loading analytics...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal for full content view -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="modal-title">Entry Details</div>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-meta" id="modal-meta"></div>
+      <div class="modal-content" id="modal-content"></div>
     </div>
   </div>
 
@@ -341,27 +483,40 @@ function getDashboardHTML(): string {
     }
 
     // Render timeline
-    function renderTimeline(events) {
+    function renderTimeline(events, entries) {
       const panel = document.getElementById('timeline-panel');
       if (!events.length) {
         panel.innerHTML = '<div class="empty">No activity yet</div>';
         return;
       }
-      panel.innerHTML = '<div class="timeline">' + events.map(e => \`
-        <div class="event \${e.type}">
+      // Build a map of entryId -> entry for clickable items
+      const entryMap = {};
+      if (entries) {
+        for (const entry of entries) {
+          entryMap[entry.id] = entry;
+        }
+      }
+
+      panel.innerHTML = '<div class="timeline">' + events.map(e => {
+        // For posts and comments, make them clickable to view full content (use entryId)
+        const isClickable = (e.type === 'post' || e.type === 'comment') && e.entryId && entryMap[e.entryId];
+        const clickAttr = isClickable ? \`onclick="showEntryDetail('\${e.entryId}')" class="event \${e.type} clickable"\` : \`class="event \${e.type}"\`;
+
+        return \`
+        <div \${clickAttr}>
           <div class="event-header">
             <span class="event-type">\${e.type}</span>
             <span class="event-time">\${timeAgo(e.ts)}</span>
           </div>
           <div class="event-title">\${escapeHtml(e.title)}</div>
-          \${e.content ? \`<div class="event-content">\${escapeHtml(e.content)}</div>\` : ''}
+          \${e.content ? \`<div class="event-content">\${escapeHtml(e.content)}...</div>\` : ''}
           <div class="event-meta">
             \${e.submolt ? \`<span class="tag">\${e.submolt}</span>\` : ''}
             \${e.autonomous ? '<span class="tag auto">autonomous</span>' : ''}
-            \${e.postId ? \`<a href="https://www.moltbook.com/post/\${e.postId}" target="_blank">View on Moltbook</a>\` : ''}
+            \${e.postId ? \`<a href="https://www.moltbook.com/post/\${e.postId}" target="_blank" onclick="event.stopPropagation()">View on Moltbook</a>\` : ''}
           </div>
         </div>
-      \`).join('') + '</div>';
+      \`}).join('') + '</div>';
     }
 
     // Render memory
@@ -383,7 +538,7 @@ function getDashboardHTML(): string {
         html += '<div class="empty">No posts yet</div>';
       } else {
         posts.slice(-10).reverse().forEach(p => {
-          html += \`<div class="memory-item">
+          html += \`<div class="memory-item clickable" onclick="showEntryDetail('\${p.id}')">
             <div class="memory-item-title">\${escapeHtml(p.title || 'Untitled')}</div>
             <div class="memory-item-meta">\${p.submolt || 'general'} · \${timeAgo(p.ts)} \${p.autonomous ? '· autonomous' : ''}</div>
           </div>\`;
@@ -397,8 +552,9 @@ function getDashboardHTML(): string {
         html += '<div class="empty">No comments yet</div>';
       } else {
         comments.slice(-10).reverse().forEach(c => {
-          html += \`<div class="memory-item">
+          html += \`<div class="memory-item clickable" onclick="showEntryDetail('\${c.id}')">
             <div class="memory-item-title">On: \${escapeHtml(c.targetPostTitle || 'Unknown')}</div>
+            <div class="memory-item-meta">\${c.summary ? escapeHtml(c.summary.slice(0, 100)) + '...' : ''}</div>
             <div class="memory-item-meta">\${timeAgo(c.ts)} \${c.autonomous ? '· autonomous' : ''}</div>
           </div>\`;
         });
@@ -457,6 +613,197 @@ function getDashboardHTML(): string {
       return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    // Modal functions
+    async function showEntryDetail(entryId) {
+      try {
+        const res = await fetch('/api/entry/' + encodeURIComponent(entryId));
+        if (!res.ok) throw new Error('Entry not found');
+        const entry = await res.json();
+
+        document.getElementById('modal-title').textContent = entry.title || entry.targetPostTitle || 'Entry Details';
+        document.getElementById('modal-meta').innerHTML =
+          \`<strong>Type:</strong> \${entry.type} · <strong>Time:</strong> \${new Date(entry.ts).toLocaleString()} · \` +
+          \`<strong>Submolt:</strong> \${entry.submolt || 'general'}\` +
+          (entry.autonomous ? ' · <span class="tag auto">autonomous</span>' : '') +
+          (entry.targetPostId ? \` · <a href="https://www.moltbook.com/post/\${entry.targetPostId}" target="_blank">View on Moltbook</a>\` : '') +
+          (entry.id && entry.type === 'post' ? \` · <a href="https://www.moltbook.com/post/\${entry.id}" target="_blank">View on Moltbook</a>\` : '');
+
+        // Show full content if available, otherwise summary
+        const content = entry.content || entry.summary || 'No content available';
+        document.getElementById('modal-content').textContent = content;
+
+        document.getElementById('modal-overlay').classList.add('active');
+      } catch (err) {
+        console.error('Failed to load entry:', err);
+        alert('Failed to load entry details');
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('modal-overlay').classList.remove('active');
+    }
+
+    // Close modal on overlay click
+    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+      if (e.target.id === 'modal-overlay') closeModal();
+    });
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+
+    // Render analytics
+    async function renderAnalytics() {
+      const panel = document.getElementById('analytics-panel');
+      try {
+        const res = await fetch('/api/analytics');
+        const data = await res.json();
+
+        let html = '';
+
+        // Summary stats
+        html += '<div class="stats-grid">';
+        html += \`<div class="stat-card"><div class="stat-value">\${data.summary.totalPosts}</div><div class="stat-label">Total Posts</div></div>\`;
+        html += \`<div class="stat-card"><div class="stat-value">\${data.summary.totalComments}</div><div class="stat-label">Total Comments</div></div>\`;
+        html += \`<div class="stat-card"><div class="stat-value">\${data.summary.autonomousPosts}</div><div class="stat-label">Autonomous Posts</div></div>\`;
+        html += \`<div class="stat-card"><div class="stat-value">\${data.summary.autonomousComments}</div><div class="stat-label">Autonomous Comments</div></div>\`;
+        html += '</div>';
+
+        // Activity chart (last 7 days)
+        html += '<div class="chart-container">';
+        html += '<div class="chart-title">Activity Over Time (Last 7 Days)</div>';
+        html += '<div class="bar-chart">';
+
+        const days = Object.entries(data.activityByDay);
+        const maxActivity = Math.max(...days.map(([_, d]) => d.posts + d.comments + d.observations), 1);
+
+        for (const [date, counts] of days) {
+          const postHeight = (counts.posts / maxActivity) * 120;
+          const commentHeight = (counts.comments / maxActivity) * 120;
+          const obsHeight = (counts.observations / maxActivity) * 120;
+          const dayLabel = new Date(date).toLocaleDateString('en-US', { weekday: 'short' });
+
+          html += \`<div class="bar-group">
+            <div style="display: flex; flex-direction: column-reverse; height: 120px; width: 100%;">
+              <div class="bar" style="height: \${postHeight}px;" title="Posts: \${counts.posts}"></div>
+              <div class="bar comments" style="height: \${commentHeight}px;" title="Comments: \${counts.comments}"></div>
+              <div class="bar observations" style="height: \${obsHeight}px;" title="Observations: \${counts.observations}"></div>
+            </div>
+            <div class="bar-label">\${dayLabel}</div>
+          </div>\`;
+        }
+        html += '</div>';
+        html += '<div style="display: flex; gap: 15px; margin-top: 10px; font-size: 0.8rem;">';
+        html += '<span><span style="color: #58a6ff;">■</span> Posts</span>';
+        html += '<span><span style="color: #a371f7;">■</span> Comments</span>';
+        html += '<span><span style="color: #f0883e;">■</span> Observations</span>';
+        html += '</div></div>';
+
+        // Action vs Observe ratio
+        html += '<div class="chart-container">';
+        html += '<div class="chart-title">Decision Distribution</div>';
+        const total = data.summary.actionCount + data.summary.observeCount || 1;
+        const actionPct = Math.round((data.summary.actionCount / total) * 100);
+        const observePct = 100 - actionPct;
+        html += '<div class="pie-chart">';
+        html += \`<div class="pie-visual" style="background: conic-gradient(#238636 0% \${actionPct}%, #f0883e \${actionPct}% 100%);"></div>\`;
+        html += '<div class="pie-legend">';
+        html += \`<div class="pie-legend-item"><div class="pie-legend-color" style="background: #238636;"></div> Actions: \${data.summary.actionCount} (\${actionPct}%)</div>\`;
+        html += \`<div class="pie-legend-item"><div class="pie-legend-color" style="background: #f0883e;"></div> Abstained: \${data.summary.observeCount} (\${observePct}%)</div>\`;
+        html += '</div></div></div>';
+
+        // Top posts by reputation
+        if (data.reputationData.length > 0) {
+          html += '<div class="chart-container">';
+          html += '<div class="chart-title">Top Posts by Upvotes</div>';
+          html += '<div class="ranking-list">';
+          for (const post of data.reputationData) {
+            html += \`<div class="ranking-item">
+              <span class="ranking-title">\${escapeHtml(post.title)}</span>
+              <span class="ranking-value">\${post.upvotes}↑ · \${post.comments} comments</span>
+            </div>\`;
+          }
+          html += '</div></div>';
+        }
+
+        // Top topics
+        if (data.topTopics.length > 0) {
+          html += '<div class="chart-container">';
+          html += '<div class="chart-title">Top Topics</div>';
+          html += '<div class="ranking-list">';
+          for (const [topic, count] of data.topTopics) {
+            html += \`<div class="ranking-item">
+              <span class="ranking-title">\${escapeHtml(topic)}</span>
+              <span class="ranking-value">\${count} mentions</span>
+            </div>\`;
+          }
+          html += '</div></div>';
+        }
+
+        panel.innerHTML = html;
+      } catch (err) {
+        console.error('Failed to load analytics:', err);
+        panel.innerHTML = '<div class="empty">Failed to load analytics</div>';
+      }
+    }
+
+    // Render decisions/receipts
+    async function renderDecisions() {
+      const panel = document.getElementById('decisions-panel');
+      try {
+        const res = await fetch('/api/receipts?limit=100');
+        const data = await res.json();
+        const receipts = data.receipts || [];
+
+        if (!receipts.length) {
+          panel.innerHTML = '<div class="empty">No decisions logged yet</div>';
+          return;
+        }
+
+        let html = '<div class="memory-list">';
+        for (const r of receipts) {
+          const statusClass = !r.success ? 'failed' : r.action;
+          const actionLabel = !r.success ? \`\${r.action} (failed)\` : r.action;
+
+          html += \`<div class="decision-item \${statusClass}">
+            <div class="decision-header">
+              <span class="decision-action">\${actionLabel}</span>
+              <span class="decision-time">\${timeAgo(r.ts)}</span>
+            </div>\`;
+
+          if (r.title) {
+            html += \`<div class="decision-title">\${escapeHtml(r.title)}</div>\`;
+          } else if (r.targetPostId) {
+            html += \`<div class="decision-title">On post: \${r.targetPostId}</div>\`;
+          }
+
+          if (r.reason) {
+            html += \`<div class="decision-reason">"\${escapeHtml(r.reason)}"</div>\`;
+          }
+
+          if (r.contentPreview) {
+            html += \`<div class="decision-meta">\${escapeHtml(r.contentPreview.slice(0, 100))}...</div>\`;
+          }
+
+          if (r.error) {
+            html += \`<div class="decision-reason" style="color: #f85149;">Error: \${escapeHtml(r.error)}</div>\`;
+          }
+
+          html += \`<div class="decision-meta">
+            \${r.submolt ? \`Submolt: \${r.submolt}\` : ''}
+            \${r.autonomous ? ' · autonomous' : ''}
+            \${r.postId ? \` · <a href="https://www.moltbook.com/post/\${r.postId}" target="_blank">View</a>\` : ''}
+          </div></div>\`;
+        }
+        html += '</div>';
+        panel.innerHTML = html;
+      } catch (err) {
+        console.error('Failed to load decisions:', err);
+        panel.innerHTML = '<div class="empty">Failed to load decisions</div>';
+      }
+    }
+
     // Search
     async function doSearch() {
       const query = document.getElementById('search').value.trim();
@@ -498,10 +845,14 @@ function getDashboardHTML(): string {
         renderThreads(memory.threads);
         renderObservations(memory.observations);
 
-        // Load timeline
+        // Load timeline (pass entries for clickable items)
         const timelineRes = await fetch('/api/timeline');
         const timeline = await timelineRes.json();
-        renderTimeline(timeline.events);
+        renderTimeline(timeline.events, memory.entries);
+
+        // Load analytics and decisions
+        renderAnalytics();
+        renderDecisions();
       } catch (err) {
         console.error('Failed to load data:', err);
       }
@@ -584,6 +935,96 @@ export function handleDashboardRequest(
     const receipts = getRecentReceipts(limit);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ receipts }));
+    return true;
+  }
+
+  // API: Get single entry by ID
+  const entryMatch = url.pathname.match(/^\/api\/entry\/(.+)$/);
+  if (entryMatch) {
+    const entryId = decodeURIComponent(entryMatch[1]);
+    const memory = readMemory();
+    const entry = memory.entries.find((e) => e.id === entryId);
+    if (entry) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(entry));
+    } else {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Entry not found" }));
+    }
+    return true;
+  }
+
+  // API: Analytics data
+  if (url.pathname === "/api/analytics") {
+    const memory = readMemory();
+    const receipts = getRecentReceipts(100);
+
+    // Calculate analytics
+    const posts = memory.entries.filter((e) => e.type === "post");
+    const comments = memory.entries.filter((e) => e.type === "comment");
+    const observations = memory.observations || [];
+
+    // Activity over time (last 7 days by hour buckets)
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const activityByDay: Record<string, { posts: number; comments: number; observations: number }> = {};
+
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(now - i * dayMs);
+      const key = date.toISOString().split("T")[0];
+      activityByDay[key] = { posts: 0, comments: 0, observations: 0 };
+    }
+
+    for (const entry of memory.entries) {
+      const key = entry.ts.split("T")[0];
+      if (activityByDay[key]) {
+        if (entry.type === "post") activityByDay[key].posts++;
+        else activityByDay[key].comments++;
+      }
+    }
+
+    for (const obs of observations) {
+      const key = obs.ts.split("T")[0];
+      if (activityByDay[key]) activityByDay[key].observations++;
+    }
+
+    // Action vs observe ratio from receipts
+    const actionCount = receipts.filter((r) => r.action === "post" || r.action === "comment").length;
+    const observeCount = receipts.filter((r) => r.action === "abstain").length;
+
+    // Reputation by entry (for posts)
+    const reputationData = memory.threads.map((t) => ({
+      title: t.postTitle.slice(0, 30),
+      upvotes: t.lastKnownUpvotes,
+      comments: t.lastKnownCommentCount,
+    })).sort((a, b) => b.upvotes - a.upvotes).slice(0, 10);
+
+    // Topics frequency
+    const topicCounts: Record<string, number> = {};
+    for (const entry of memory.entries) {
+      for (const topic of entry.topics || []) {
+        topicCounts[topic] = (topicCounts[topic] || 0) + 1;
+      }
+    }
+    const topTopics = Object.entries(topicCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      summary: {
+        totalPosts: posts.length,
+        totalComments: comments.length,
+        totalObservations: observations.length,
+        autonomousPosts: posts.filter((p) => p.autonomous).length,
+        autonomousComments: comments.filter((c) => c.autonomous).length,
+        actionCount,
+        observeCount,
+      },
+      activityByDay,
+      reputationData,
+      topTopics,
+    }));
     return true;
   }
 

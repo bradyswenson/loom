@@ -3,7 +3,7 @@
  * Sends DMs to the operator when interesting things happen.
  */
 
-import { Client, User } from "discord.js";
+import { Client, User, AttachmentBuilder } from "discord.js";
 
 // Thresholds for alerts
 const REPLY_THRESHOLD = 1;           // Alert on any new reply to our posts
@@ -55,14 +55,27 @@ export function isAlertsEnabled(): boolean {
 }
 
 /**
- * Send a DM to the operator.
+ * Send a DM to the operator with optional attachment.
  */
-async function sendOperatorDM(message: string): Promise<boolean> {
+async function sendOperatorDM(
+  message: string,
+  attachment?: { content: string; filename: string }
+): Promise<boolean> {
   if (!canAlert()) return false;
 
   try {
     const user = await discordClient!.users.fetch(operatorId!);
-    await user.send(message);
+
+    if (attachment) {
+      const file = new AttachmentBuilder(Buffer.from(attachment.content, "utf-8"), {
+        name: attachment.filename,
+        description: "Full content from Loom",
+      });
+      await user.send({ content: message, files: [file] });
+    } else {
+      await user.send(message);
+    }
+
     console.log(`alerts: Sent DM to operator`);
     return true;
   } catch (err) {
@@ -140,14 +153,14 @@ export async function alertTraction(
 
 /**
  * Alert when Loom posts or comments autonomously.
- * Includes preview of the content so operator can see what was said.
+ * Includes full content - attaches md file if content is long.
  */
 export async function alertAutonomousAction(
   action: "post" | "comment",
   title: string,
   postId: string,
   submolt?: string,
-  contentPreview?: string
+  fullContent?: string
 ): Promise<void> {
   if (!canAlert()) return;
 
@@ -163,14 +176,33 @@ export async function alertAutonomousAction(
   let message = `${emoji} **Loom ${actionText}${locationText}**\n\n` +
     `"${title}"`;
 
-  if (contentPreview) {
-    const preview = contentPreview.slice(0, 300);
-    message += `\n\n>>> ${preview}${contentPreview.length > 300 ? "..." : ""}`;
+  // Determine if we need to attach the full content
+  const MAX_INLINE_LENGTH = 1500; // Leave room for message formatting
+  let attachment: { content: string; filename: string } | undefined;
+
+  if (fullContent) {
+    if (fullContent.length > MAX_INLINE_LENGTH) {
+      // Show preview and attach full content
+      const preview = fullContent.slice(0, 400);
+      message += `\n\n>>> ${preview}...\n\n_(Full ${action} attached)_`;
+      attachment = {
+        content: `# Loom ${action === "post" ? "Post" : "Comment"}\n\n` +
+          `**${action === "post" ? "Title" : "On"}:** ${title}\n` +
+          `**Submolt:** ${submolt || "general"}\n` +
+          `**Time:** ${new Date().toISOString()}\n` +
+          `**Link:** https://www.moltbook.com/post/${postId}\n\n` +
+          `---\n\n${fullContent}`,
+        filename: `loom-${action}-${Date.now()}.md`,
+      };
+    } else {
+      // Content is short enough to include inline
+      message += `\n\n>>> ${fullContent}`;
+    }
   }
 
   message += `\n\n<https://www.moltbook.com/post/${postId}>`;
 
-  await sendOperatorDM(message);
+  await sendOperatorDM(message, attachment);
 }
 
 /**
