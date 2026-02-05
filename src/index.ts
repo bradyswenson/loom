@@ -11,6 +11,7 @@ import { getDoctrineMetadata } from "./doctrine.js";
 import { getLLMConfig } from "./llm.js";
 import { checkConnection as checkMoltbook, isConfigured as moltbookConfigured } from "./moltbook.js";
 import { initAutonomous, stopAutonomous, getAutonomousStatus } from "./autonomous.js";
+import { handleDashboardRequest } from "./dashboard.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -19,10 +20,15 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 let moltbookStatus: { ok: boolean; agent?: string; error?: string } | null = null;
 
 /**
- * Simple HTTP server for health checks (required by Fly.io).
+ * HTTP server for health checks and dashboard (required by Fly.io).
  */
 function startHealthServer(): http.Server {
   const server = http.createServer(async (req, res) => {
+    // Check for dashboard routes first
+    if (handleDashboardRequest(req, res)) {
+      return;
+    }
+
     if (req.url === "/health" || req.url === "/") {
       const doctrine = getDoctrineMetadata();
       const llm = getLLMConfig();

@@ -3,7 +3,7 @@
  * Responds to DMs and @mentions only.
  */
 
-import { Client, GatewayIntentBits, Message, Partials } from "discord.js";
+import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder } from "discord.js";
 import { generate } from "./llm.js";
 import { createPost, createComment, getFeed, getPost, getComments, getSubmolts, isConfigured as moltbookConfigured, type MoltbookPost } from "./moltbook.js";
 import {
@@ -168,6 +168,52 @@ function isMemoryRequest(text: string): boolean {
     /^tracked threads$/i,
   ];
   return patterns.some(p => p.test(text.trim()));
+}
+
+/**
+ * Check if message is a commands/help request.
+ */
+function isCommandsRequest(text: string): boolean {
+  const patterns = [
+    /^\/?commands$/i,
+    /^\/?help$/i,
+    /^what can you do/i,
+    /^show (me )?(your )?commands/i,
+  ];
+  return patterns.some(p => p.test(text.trim()));
+}
+
+/**
+ * Format the commands help message.
+ */
+function formatCommandsHelp(): string {
+  return `**Loom Commands**
+
+📊 **Status & Reports**
+• \`status\` — cooldowns, limits, autonomous mode, memory, alerts
+• \`memory\` — posts, comments, threads, observations
+• \`activity\` — recent publish receipts
+• \`commands\` — this help message
+
+🤖 **Autonomous Mode**
+• \`start autonomous\` — enable autonomous browsing
+• \`stop autonomous\` — disable autonomous browsing
+• \`check moltbook\` — trigger immediate check
+• \`set interval [N]\` — set check interval (minutes)
+
+🔔 **Alerts**
+• \`alerts on\` — enable operator DM alerts
+• \`alerts off\` — disable operator DM alerts
+
+📝 **Moltbook**
+• \`post to moltbook about [topic]\` — create a new post
+• \`read post [id]\` — fetch and display a post
+
+🌐 **Dashboard**
+• Visit https://loom-v3.fly.dev/dashboard for the web UI
+
+💬 **Chat**
+• Just talk to me naturally — I'll respond conversationally`;
 }
 
 /**
@@ -915,6 +961,14 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
   console.log(`discord: msg=${message.id} author=${message.author.id} isDM=${isDM}`);
 
   try {
+    // Check for commands request
+    if (isCommandsRequest(text)) {
+      const help = formatCommandsHelp();
+      await message.reply({ content: help });
+      console.log(`discord: sent commands help to msg=${message.id}`);
+      return;
+    }
+
     // Check for status request
     if (isStatusRequest(text)) {
       const report = formatStatusReport();
@@ -1046,13 +1100,17 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       reply = "I'm not sure how to respond to that. Could you rephrase?";
     }
 
-    // Truncate if needed
+    // Handle long responses - attach full text as .md file
     if (reply.length > MAX_REPLY_LENGTH) {
-      reply = reply.slice(0, MAX_REPLY_LENGTH - 1) + "...";
+      const truncated = reply.slice(0, MAX_REPLY_LENGTH - 50) + "\n\n_(Full response attached)_";
+      const attachment = new AttachmentBuilder(Buffer.from(reply, "utf-8"), {
+        name: "response.md",
+        description: "Full response from Loom",
+      });
+      await message.reply({ content: truncated, files: [attachment] });
+    } else {
+      await message.reply({ content: reply });
     }
-
-    // Send reply
-    await message.reply({ content: reply });
 
     console.log(`discord: replied msg=${message.id} provider=${result.provider} tokens=${result.outputTokens ?? "?"}`);
   } catch (err) {

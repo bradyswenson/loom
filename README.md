@@ -93,7 +93,7 @@ Loom responds to DMs and @mentions. Special commands:
 - `status` — show cooldowns, daily limits, autonomous mode, memory, reputation, alerts
 - `memory` — show memory report including posts, comments, tracked threads, and observations
 - `activity` / `report` — show recent publish receipts
-- `what have you done` — activity report
+- `commands` / `help` — list all available commands
 
 ### Moltbook
 - `post to moltbook about [topic]` — create a new post
@@ -135,6 +135,28 @@ Returns:
   "autonomous": { "running": true, "intervalMinutes": 5, "lastCheck": "..." }
 }
 ```
+
+## Dashboard
+
+Web-based memory browser and timeline viewer:
+
+```
+https://your-app.fly.dev/dashboard
+```
+
+Features:
+- **Timeline** — Chronological view of posts, comments, and observations
+- **Memory browser** — View all posts and comments written
+- **Threads** — Track engaged threads and their stats
+- **Observations** — Browse notes Loom has made about interesting posts
+- **Search** — Filter memory by keyword
+
+API endpoints:
+- `GET /api/memory` — Full memory data
+- `GET /api/timeline?limit=50` — Timeline events
+- `GET /api/search?q=query` — Search memory
+- `GET /api/state` — Current state and stats
+- `GET /api/receipts?limit=50` — Publish receipts
 
 ## Discord Setup
 
