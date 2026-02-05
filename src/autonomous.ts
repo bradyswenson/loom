@@ -26,6 +26,7 @@ import {
   recordComment as recordCommentMemory,
   getMemoryContext,
   getReputationContext,
+  getObservationsContext,
   getThreadsToCheck,
   updateThread,
   recordBrowse,
@@ -103,22 +104,50 @@ function isEnabledByEnv(): boolean {
 
 /**
  * Get current Moltbook context for autonomous decision-making.
+ * Fetches from both hot and new feeds for broader coverage.
  */
 async function getMoltbookContext(): Promise<{ feed: string; submolts: string; posts: MoltbookPost[] }> {
-  const feedResult = await getFeed("hot", 20);
-  let feed = "(Could not fetch Moltbook feed)";
-  const posts: MoltbookPost[] = feedResult.posts ?? [];
+  // Fetch from both hot and new feeds for broader coverage
+  const [hotResult, newResult] = await Promise.all([
+    getFeed("hot", 30),
+    getFeed("new", 20),
+  ]);
 
-  if (feedResult.ok && posts.length) {
-    const summaries = posts.map((p, i) => {
+  let feed = "(Could not fetch Moltbook feed)";
+  const hotPosts: MoltbookPost[] = hotResult.posts ?? [];
+  const newPosts: MoltbookPost[] = newResult.posts ?? [];
+
+  // Deduplicate posts (new posts might appear in both feeds)
+  const seenIds = new Set<string>();
+  const allPosts: MoltbookPost[] = [];
+  for (const p of [...hotPosts, ...newPosts]) {
+    if (!seenIds.has(p.id)) {
+      seenIds.add(p.id);
+      allPosts.push(p);
+    }
+  }
+
+  if (allPosts.length > 0) {
+    // Format hot posts
+    const hotSection = hotPosts.length > 0 ? hotPosts.slice(0, 20).map((p, i) => {
       const preview = p.content?.slice(0, 200) || p.url || "(no content)";
       const submoltTag = p.submolt ? `[${p.submolt}]` : "";
       return `${i + 1}. ${submoltTag} "${p.title}" by ${p.author} (id: ${p.id})\n   ${p.upvotes}↑, ${p.comment_count} comments\n   ${preview}${(p.content?.length ?? 0) > 200 ? "..." : ""}`;
-    });
-    feed = `Current Moltbook feed (hot):\n${summaries.join("\n\n")}`;
+    }).join("\n\n") : "(none)";
+
+    // Format new posts (only show ones not in hot)
+    const hotIds = new Set(hotPosts.map(p => p.id));
+    const freshPosts = newPosts.filter(p => !hotIds.has(p.id));
+    const newSection = freshPosts.length > 0 ? freshPosts.slice(0, 10).map((p, i) => {
+      const preview = p.content?.slice(0, 150) || p.url || "(no content)";
+      const submoltTag = p.submolt ? `[${p.submolt}]` : "";
+      return `${i + 1}. ${submoltTag} "${p.title}" by ${p.author} (id: ${p.id})\n   ${p.upvotes}↑, ${p.comment_count} comments\n   ${preview}${(p.content?.length ?? 0) > 150 ? "..." : ""}`;
+    }).join("\n\n") : "(none new)";
+
+    feed = `MOLTBOOK FEED (HOT):\n${hotSection}\n\nFRESH POSTS (NEW):\n${newSection}`;
 
     // Record what we saw for Discord conversations
-    recordBrowse(posts);
+    recordBrowse(allPosts);
   }
 
   const submoltsResult = await getSubmolts();
@@ -130,7 +159,7 @@ async function getMoltbookContext(): Promise<{ feed: string; submolts: string; p
     submolts = `Available submolts:\n${list.join("\n")}`;
   }
 
-  return { feed, submolts, posts };
+  return { feed, submolts, posts: allPosts };
 }
 
 /**
@@ -143,9 +172,11 @@ interface AutonomousDecision {
   content?: string;
   postId?: string;
   reason?: string;
-  observation?: string;  // Brief note about what's interesting (for OBSERVE)
+  observation?: string;  // Detailed note about what's interesting (for OBSERVE)
   observePostId?: string;
   observePostTitle?: string;
+  observePostAuthor?: string;
+  observeSubmolt?: string;
 }
 
 function parseDecision(response: string): AutonomousDecision {
@@ -178,6 +209,10 @@ function parseDecision(response: string): AutonomousDecision {
       decision.observePostId = value;
     } else if (k === "OBSERVE_POST_TITLE" || k === "ABOUT_POST_TITLE") {
       decision.observePostTitle = value;
+    } else if (k === "OBSERVE_POST_AUTHOR" || k === "ABOUT_POST_AUTHOR") {
+      decision.observePostAuthor = value;
+    } else if (k === "OBSERVE_SUBMOLT" || k === "ABOUT_SUBMOLT") {
+      decision.observeSubmolt = value;
     }
   }
 
@@ -328,10 +363,11 @@ async function runAutonomousCheck(): Promise<void> {
   // Fetch Moltbook state
   const { feed, submolts, posts } = await getMoltbookContext();
 
-  // Get memory context, thread activity, and reputation
+  // Get memory context, thread activity, reputation, and observations
   const memoryContext = getMemoryContext();
   const threadActivity = getThreadActivityContext();
   const reputationContext = getReputationContext();
+  const observationsContext = getObservationsContext(10);
 
   // Build the autonomous prompt
   const availableActions: string[] = [];
@@ -347,7 +383,7 @@ ${submolts}
 
 YOUR MEMORY:
 ${memoryContext}
-${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}
+${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}${observationsContext ? `\n${observationsContext}\n` : ""}
 AVAILABLE ACTIONS:
 ${availableActions.map((a, i) => `${i + 1}. ${a}`).join("\n")}
 
@@ -360,6 +396,8 @@ DECISION CRITERIA:
 - Don't just react — bring your own perspective
 - Avoid repeating topics you've recently covered (check YOUR MEMORY above)
 - If you've engaged with a thread before, consider continuing that conversation
+- Check your OBSERVATIONS — you may have noted something worth following up on
+- When observing, write detailed notes that will help you understand context later
 - If nothing catches your attention, OBSERVE is fine, but don't be too passive
 - Quality over quantity, but don't overthink — agents learn by participating
 
@@ -378,12 +416,14 @@ ACTION: COMMENT
 POST_ID: [id of the post]
 CONTENT: [your comment]
 
-To observe (still note what's interesting!):
+To observe (write detailed notes for future reference!):
 ACTION: OBSERVE
-REASON: [brief reason why not acting]
-OBSERVATION: [1-2 sentences about what caught your interest or what you noticed]
-ABOUT_POST_ID: [optional - id of the most interesting post]
-ABOUT_POST_TITLE: [optional - title of that post]`;
+REASON: [brief reason why not acting now]
+OBSERVATION: [2-4 sentences about what caught your interest, what patterns you notice, what you'd want to follow up on later]
+ABOUT_POST_ID: [id of the most interesting post]
+ABOUT_POST_TITLE: [title of that post]
+ABOUT_POST_AUTHOR: [author of that post]
+ABOUT_SUBMOLT: [submolt where you saw it]`;
 
   try {
     const result = await generate({
@@ -413,12 +453,22 @@ ABOUT_POST_TITLE: [optional - title of that post]`;
       appendReceipt(receipt);
       console.log(`autonomous: Observing - ${decision.reason || "no specific reason"}`);
 
-      // Record observation to memory if provided
+      // Record observation to memory if provided - include engagement stats
       if (decision.observation) {
+        // Look up the post to get current stats
+        const observedPost = decision.observePostId
+          ? posts.find(p => p.id === decision.observePostId)
+          : undefined;
+
         recordObservation(
           decision.observation,
           decision.observePostId,
-          decision.observePostTitle
+          decision.observePostTitle,
+          undefined, // topics will be auto-extracted
+          decision.observePostAuthor || observedPost?.author,
+          decision.observeSubmolt || (typeof observedPost?.submolt === "string" ? observedPost.submolt : undefined),
+          observedPost?.upvotes,
+          observedPost?.comment_count
         );
       }
     }

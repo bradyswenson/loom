@@ -143,6 +143,7 @@ export async function alertTraction(
   alertedEvents.add(key);
 
   const emoji = threshold >= SIGNIFICANT_TRACTION ? "🚀" : "📈";
+  // Wrap URL in <> to prevent Discord link preview
   const message = `${emoji} **Post gaining traction!**\n\n` +
     `"${postTitle}"\n` +
     `Now at ${upvotes} upvotes\n\n` +
@@ -153,7 +154,7 @@ export async function alertTraction(
 
 /**
  * Alert when Loom posts or comments autonomously.
- * Includes full content - attaches md file if content is long.
+ * Always attaches md file with full content for reference.
  */
 export async function alertAutonomousAction(
   action: "post" | "comment",
@@ -176,30 +177,32 @@ export async function alertAutonomousAction(
   let message = `${emoji} **Loom ${actionText}${locationText}**\n\n` +
     `"${title}"`;
 
-  // Determine if we need to attach the full content
-  const MAX_INLINE_LENGTH = 1500; // Leave room for message formatting
+  // Always attach full content as MD file for both posts and comments
   let attachment: { content: string; filename: string } | undefined;
 
   if (fullContent) {
-    if (fullContent.length > MAX_INLINE_LENGTH) {
-      // Show preview and attach full content
-      const preview = fullContent.slice(0, 400);
-      message += `\n\n>>> ${preview}...\n\n_(Full ${action} attached)_`;
-      attachment = {
-        content: `# Loom ${action === "post" ? "Post" : "Comment"}\n\n` +
-          `**${action === "post" ? "Title" : "On"}:** ${title}\n` +
-          `**Submolt:** ${submolt || "general"}\n` +
-          `**Time:** ${new Date().toISOString()}\n` +
-          `**Link:** https://www.moltbook.com/post/${postId}\n\n` +
-          `---\n\n${fullContent}`,
-        filename: `loom-${action}-${Date.now()}.md`,
-      };
-    } else {
-      // Content is short enough to include inline
-      message += `\n\n>>> ${fullContent}`;
+    // Show preview inline
+    const MAX_PREVIEW = 400;
+    const preview = fullContent.slice(0, MAX_PREVIEW);
+    const truncated = fullContent.length > MAX_PREVIEW;
+    message += `\n\n>>> ${preview}${truncated ? "..." : ""}`;
+    if (truncated) {
+      message += `\n\n_(Full ${action} attached)_`;
     }
+
+    // Always attach full content as MD file
+    attachment = {
+      content: `# Loom ${action === "post" ? "Post" : "Comment"}\n\n` +
+        `**${action === "post" ? "Title" : "On"}:** ${title}\n` +
+        `**Submolt:** ${submolt || "general"}\n` +
+        `**Time:** ${new Date().toISOString()}\n` +
+        `**Link:** https://www.moltbook.com/post/${postId}\n\n` +
+        `---\n\n${fullContent}`,
+      filename: `loom-${action}-${Date.now()}.md`,
+    };
   }
 
+  // Wrap URL in <> to prevent Discord link preview
   message += `\n\n<https://www.moltbook.com/post/${postId}>`;
 
   await sendOperatorDM(message, attachment);
@@ -219,10 +222,11 @@ export async function alertInteresting(
   if (alertedEvents.has(key)) return;
   alertedEvents.add(key);
 
+  // Wrap URL in <> to prevent Discord link preview
   const message = `👀 **Interesting post on Moltbook**\n\n` +
     `"${postTitle}"\n` +
     `${reason}\n\n` +
-    `https://www.moltbook.com/post/${postId}`;
+    `<https://www.moltbook.com/post/${postId}>`;
 
   await sendOperatorDM(message);
 }

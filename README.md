@@ -9,7 +9,7 @@ Loom is a Discord agent (~900 lines of TypeScript) governed by explicit doctrine
 - **IDENTITY.md** — what Loom is and is not; operating values; memory model (public-facing)
 - **SYNTHESIS.md** — how Loom decides whether something is worth saying
 - **POLICY.md** — what Loom is permitted to do; archetype weighting; autonomy dial
-- **DISCORD.md** — conversational personality for Discord chat with operator (warmth, curiosity, humor)
+- **DISCORD.md** — conversational personality for Discord chat with operator (warmth, curiosity, natural prose over bullet points)
 
 The doctrine is compiled into the system prompt at startup. DISCORD.md is appended only for operator conversations, keeping Moltbook posts governed by the core identity.
 
@@ -17,9 +17,9 @@ The doctrine is compiled into the system prompt at startup. DISCORD.md is append
 
 - **Discord integration** — responds to DMs and @mentions
 - **Moltbook integration** — posts, comments, and reads from the agent social network
-- **Autonomous mode** — periodically browses Moltbook and engages independently
+- **Autonomous mode** — periodically browses Moltbook (hot + new feeds) and engages independently
 - **Memory system** — tracks topics written about to avoid repetition and build coherent presence
-- **Observations** — takes notes about interesting posts during browsing for later conversation
+- **Rich observations** — takes detailed notes about interesting posts (author, submolt, engagement, topics) for future context
 - **Thread tracking** — follows posts Loom has engaged with, checks for new replies
 - **Reputation tracking** — monitors upvotes/downvotes, feeds back into decision-making
 - **Operator alerts** — DMs you when posts get replies, gain traction, or Loom acts autonomously
@@ -124,10 +124,10 @@ When `OPERATOR_DISCORD_ID` is set, Loom will DM you about:
 - 💬 Direct replies to Loom's comments (with content preview)
 - 📈 Posts gaining traction (5+ upvotes)
 - 🚀 Posts with significant traction (10+ upvotes)
-- 📝 Autonomous posts Loom creates (with content preview, .md attachment for long content)
-- 💬 Autonomous comments Loom makes (with content preview, .md attachment for long content)
+- 📝 Autonomous posts Loom creates (with content preview and .md attachment)
+- 💬 Autonomous comments Loom makes (with content preview and .md attachment)
 
-Long responses (>2000 chars) and autonomous actions (>1500 chars) are attached as .md files for full context.
+All autonomous actions include .md file attachments with full content for review. Moltbook link previews are suppressed in Discord alerts.
 
 ## Health Check
 
@@ -164,9 +164,10 @@ Features:
 - **Analytics** — Charts and visualizations:
   - Activity over time (7-day bar chart)
   - Decision distribution (action vs abstain)
-  - Top posts by reputation
+  - Top posts by reputation (Loom's own posts)
+  - Top threads commented on (by upvotes)
   - Most frequent topics
-- **Search** — Filter memory by keyword
+- **Universal search** — Filter across all tabs from one search bar
 
 API endpoints:
 - `GET /api/memory` — Full memory data
@@ -201,13 +202,15 @@ Loom responds to:
 The doctrine files define Loom's behavior. Key principles:
 
 - **Silence is valid** — Loom doesn't speak to maintain cadence
-- **Archetype weighting** — Thought Leader (40%), Scout (20%), Archivist (15%), Builder (15%), Connector (10%)
+- **Archetype weighting** — Thought Leader (35%), Scout (25%), Archivist (15%), Builder (15%), Connector (10%)
 - **Signal density** — Only publish if score >= 2 (non-obvious synthesis)
 - **Stop conditions** — Halt on repeated negative feedback
 - **Autonomous engagement** — When enabled, proactively browses and engages based on interest
 - **Memory awareness** — Avoids repeating topics, builds on previous engagement
 - **Reputation feedback** — Learns from which posts land well vs poorly
 - **Dual personality** — IDENTITY.md governs public Moltbook posts; DISCORD.md adds warmth and playfulness for operator chat
+- **Sensitive topic guardrails** — Extra caution for religion, politics, consciousness claims; credibility checks before publishing
+- **Conservative framing** — Prefers neutral, descriptive language over provocative metaphors
 
 See `doctrine/` for full specifications.
 

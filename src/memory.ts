@@ -54,6 +54,10 @@ export interface Observation {
   ts: string;                    // ISO timestamp
   postId?: string;               // Post this observation is about (if any)
   postTitle?: string;
+  postAuthor?: string;           // Author of the post
+  submolt?: string;              // Submolt where post was seen
+  upvotes?: number;              // Engagement at time of observation
+  commentCount?: number;
   note: string;                  // Loom's thought/observation
   topics: string[];              // Related topics
 }
@@ -76,8 +80,8 @@ function getDefaultMemory(): LoomMemory {
   };
 }
 
-const MAX_BROWSE_ENTRIES = 20; // Keep last 20 posts seen
-const MAX_OBSERVATIONS = 50;   // Keep last 50 observations
+const MAX_BROWSE_ENTRIES = 50; // Keep last 50 posts seen
+const MAX_OBSERVATIONS = 100;  // Keep last 100 observations
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -593,17 +597,30 @@ export function recordObservation(
   note: string,
   postId?: string,
   postTitle?: string,
-  topics?: string[]
+  topics?: string[],
+  postAuthor?: string,
+  submolt?: string,
+  upvotes?: number,
+  commentCount?: number
 ): void {
   const memory = readMemory();
+
+  // Auto-extract topics from the observation note if not provided
+  const extractedTopics = topics && topics.length > 0
+    ? topics
+    : extractTopics(postTitle || "", note);
 
   const observation: Observation = {
     id: `obs-${Date.now()}`,
     ts: new Date().toISOString(),
     postId,
     postTitle,
+    postAuthor,
+    submolt,
+    upvotes,
+    commentCount,
     note,
-    topics: topics || [],
+    topics: extractedTopics,
   };
 
   memory.observations = memory.observations || [];
@@ -615,7 +632,7 @@ export function recordObservation(
   }
 
   writeMemory(memory);
-  console.log(`memory: recorded observation${postTitle ? ` about "${postTitle}"` : ""}`);
+  console.log(`memory: recorded observation${postTitle ? ` about "${postTitle}"` : ""}${submolt ? ` in ${submolt}` : ""}`);
 }
 
 /**
@@ -629,17 +646,26 @@ export function getRecentObservations(limit: number = 10): Observation[] {
 /**
  * Get observations context for conversations.
  */
-export function getObservationsContext(): string {
-  const obs = getRecentObservations(5);
+export function getObservationsContext(limit: number = 10): string {
+  const obs = getRecentObservations(limit);
   if (obs.length === 0) {
     return "";
   }
 
-  const lines = ["My recent observations:"];
+  const lines = ["MY RECENT OBSERVATIONS (things I noticed but didn't act on):"];
   for (const o of obs) {
     const age = Math.round((Date.now() - new Date(o.ts).getTime()) / 60000);
-    const aboutPost = o.postTitle ? ` (about "${o.postTitle.slice(0, 30)}${o.postTitle.length > 30 ? "..." : ""}")` : "";
-    lines.push(`• ${age}m ago${aboutPost}: ${o.note}`);
+    const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+
+    let context = "";
+    if (o.postTitle) {
+      const submoltTag = o.submolt ? `[${o.submolt}] ` : "";
+      const authorTag = o.postAuthor ? ` by ${o.postAuthor}` : "";
+      const statsTag = o.upvotes !== undefined ? ` (${o.upvotes}↑, ${o.commentCount || 0} replies)` : "";
+      context = `\n  Post: ${submoltTag}"${o.postTitle.slice(0, 50)}${o.postTitle.length > 50 ? "..." : ""}"${authorTag}${statsTag}`;
+    }
+    const topicsTag = o.topics.length > 0 ? `\n  Topics: ${o.topics.join(", ")}` : "";
+    lines.push(`• ${ageStr}: ${o.note}${context}${topicsTag}`);
   }
 
   return lines.join("\n");

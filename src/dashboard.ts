@@ -713,15 +713,29 @@ function getDashboardHTML(): string {
         html += \`<div class="pie-legend-item"><div class="pie-legend-color" style="background: #f0883e;"></div> Abstained: \${data.summary.observeCount} (\${observePct}%)</div>\`;
         html += '</div></div></div>';
 
-        // Top posts by reputation
-        if (data.reputationData.length > 0) {
+        // Top posts by reputation (Loom's own posts)
+        if (data.reputationData && data.reputationData.length > 0) {
           html += '<div class="chart-container">';
-          html += '<div class="chart-title">Top Posts by Upvotes</div>';
+          html += '<div class="chart-title">Top Posts by Upvotes (Loom\\'s Posts)</div>';
           html += '<div class="ranking-list">';
           for (const post of data.reputationData) {
             html += \`<div class="ranking-item">
               <span class="ranking-title">\${escapeHtml(post.title)}</span>
               <span class="ranking-value">\${post.upvotes}↑ · \${post.comments} comments</span>
+            </div>\`;
+          }
+          html += '</div></div>';
+        }
+
+        // Top comments (threads Loom commented on)
+        if (data.topCommentsData && data.topCommentsData.length > 0) {
+          html += '<div class="chart-container">';
+          html += '<div class="chart-title">Top Threads Commented On</div>';
+          html += '<div class="ranking-list">';
+          for (const thread of data.topCommentsData) {
+            html += \`<div class="ranking-item">
+              <span class="ranking-title">\${escapeHtml(thread.title)}</span>
+              <span class="ranking-value">\${thread.upvotes}↑ · \${thread.replies} replies</span>
             </div>\`;
           }
           html += '</div></div>';
@@ -804,13 +818,31 @@ function getDashboardHTML(): string {
       }
     }
 
-    // Search
+    // Search - universal across all tabs
+    let currentSearchQuery = '';
+
+    function getSearchBanner(query, count) {
+      return '<div style="margin-bottom: 15px; padding: 10px 15px; background: #1f3a5f; border-radius: 6px; color: #58a6ff; display: flex; justify-content: space-between; align-items: center;">' +
+        '<span>🔍 ' + count + ' results for "' + escapeHtml(query) + '"</span>' +
+        '<button onclick="clearSearch()" style="background: none; border: 1px solid #58a6ff; color: #58a6ff; padding: 4px 12px; border-radius: 4px; cursor: pointer;">Clear</button>' +
+        '</div>';
+    }
+
+    function clearSearch() {
+      document.getElementById('search').value = '';
+      currentSearchQuery = '';
+      loadData();
+    }
+
     async function doSearch() {
       const query = document.getElementById('search').value.trim();
+      currentSearchQuery = query;
+
       if (!query) {
         loadData();
         return;
       }
+
       try {
         const res = await fetch('/api/search?q=' + encodeURIComponent(query));
         const data = await res.json();
@@ -828,25 +860,76 @@ function getDashboardHTML(): string {
         }
         searchEvents.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
 
-        // Build entry map for clickability
         const allEntries = [...(data.posts || []), ...(data.comments || [])];
+        const totalResults = (data.posts?.length || 0) + (data.comments?.length || 0) + (data.observations?.length || 0) + (data.threads?.length || 0);
+        const banner = getSearchBanner(query, totalResults);
 
-        // Render search results to timeline
-        const panel = document.getElementById('timeline-panel');
+        // Timeline panel
+        const timelinePanel = document.getElementById('timeline-panel');
         if (searchEvents.length === 0) {
-          panel.innerHTML = '<div class="empty">No results found for "' + escapeHtml(query) + '"</div>';
+          timelinePanel.innerHTML = banner + '<div class="empty">No matching activity</div>';
         } else {
-          panel.innerHTML = '<div style="margin-bottom: 15px; color: #8b949e;">Found ' + searchEvents.length + ' results for "' + escapeHtml(query) + '"</div>';
           renderTimeline(searchEvents, allEntries);
+          timelinePanel.innerHTML = banner + timelinePanel.innerHTML;
         }
 
-        renderMemory({ entries: [...(data.posts || []), ...(data.comments || [])], threads: data.threads, observations: data.observations });
+        // Memory panel
+        renderMemory({ entries: allEntries, threads: data.threads, observations: data.observations });
+        const memoryPanel = document.getElementById('memory-panel');
+        memoryPanel.innerHTML = banner + memoryPanel.innerHTML;
+
+        // Threads panel
         renderThreads(data.threads);
+        const threadsPanel = document.getElementById('threads-panel');
+        threadsPanel.innerHTML = banner + threadsPanel.innerHTML;
+
+        // Observations panel
         renderObservations(data.observations);
+        const obsPanel = document.getElementById('observations-panel');
+        obsPanel.innerHTML = banner + obsPanel.innerHTML;
+
+        // Decisions panel - filter by query
+        const receiptsRes = await fetch('/api/receipts?limit=100');
+        const receiptsData = await receiptsRes.json();
+        const q = query.toLowerCase();
+        const filteredReceipts = (receiptsData.receipts || []).filter(r =>
+          (r.title && r.title.toLowerCase().includes(q)) ||
+          (r.reason && r.reason.toLowerCase().includes(q)) ||
+          (r.contentPreview && r.contentPreview.toLowerCase().includes(q)) ||
+          (r.submolt && r.submolt.toLowerCase().includes(q))
+        );
+        renderDecisionsWithBanner(filteredReceipts, banner);
+
+        // Analytics - no filtering, just show banner
+        renderAnalytics();
+        const analyticsPanel = document.getElementById('analytics-panel');
+        analyticsPanel.innerHTML = banner + analyticsPanel.innerHTML;
+
       } catch (err) {
         console.error('Search failed:', err);
         document.getElementById('timeline-panel').innerHTML = '<div class="empty">Search failed</div>';
       }
+    }
+
+    function renderDecisionsWithBanner(receipts, banner) {
+      const panel = document.getElementById('decisions-panel');
+      if (!receipts.length) {
+        panel.innerHTML = banner + '<div class="empty">No matching decisions</div>';
+        return;
+      }
+      let html = '<div class="memory-list">';
+      for (const r of receipts) {
+        const statusClass = !r.success ? 'failed' : r.action;
+        const actionLabel = !r.success ? r.action + ' (failed)' : r.action;
+        html += '<div class="decision-item ' + statusClass + '">';
+        html += '<div class="decision-header"><span class="decision-action">' + actionLabel + '</span><span class="decision-time">' + timeAgo(r.ts) + '</span></div>';
+        if (r.title) html += '<div class="decision-title">' + escapeHtml(r.title) + '</div>';
+        if (r.reason) html += '<div class="decision-reason">"' + escapeHtml(r.reason) + '"</div>';
+        if (r.contentPreview) html += '<div class="decision-meta">' + escapeHtml(r.contentPreview.slice(0, 100)) + '...</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+      panel.innerHTML = banner + html;
     }
 
     // Enter key for search
@@ -1032,6 +1115,18 @@ export function handleDashboardRequest(
       .sort((a, b) => b.upvotes - a.upvotes)
       .slice(0, 10);
 
+    // Top comments - threads Loom commented on (but didn't author the post)
+    const loomCommentPostIds = new Set(comments.map((c) => c.targetPostId));
+    const topCommentsData = memory.threads
+      .filter((t) => loomCommentPostIds.has(t.postId) && !loomPostIds.has(t.postId))
+      .map((t) => ({
+        title: t.postTitle.slice(0, 30),
+        upvotes: t.lastKnownUpvotes,
+        replies: t.lastKnownCommentCount,
+      }))
+      .sort((a, b) => b.upvotes - a.upvotes)
+      .slice(0, 10);
+
     // Topics frequency
     const topicCounts: Record<string, number> = {};
     for (const entry of memory.entries) {
@@ -1056,6 +1151,7 @@ export function handleDashboardRequest(
       },
       activityByDay,
       reputationData,
+      topCommentsData,
       topTopics,
     }));
     return true;
