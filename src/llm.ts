@@ -94,7 +94,14 @@ async function generateOpenAI(
     ],
   });
 
-  const text = response.choices[0]?.message?.content ?? "";
+  const choice = response.choices[0];
+  const text = choice?.message?.content ?? "";
+
+  // Log if we got an empty or filtered response
+  if (!text || choice?.finish_reason !== "stop") {
+    console.log(`llm: OpenAI finish_reason=${choice?.finish_reason} contentLength=${text?.length ?? 0}`);
+  }
+
   return {
     text: text.trim(),
     provider: "openai",

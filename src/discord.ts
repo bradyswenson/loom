@@ -1038,8 +1038,14 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       useDiscordPrompt: true,
     });
 
+    // Guard against empty LLM response
+    let reply = result.text?.trim() || "";
+    if (!reply) {
+      console.error(`discord: LLM returned empty response for msg=${message.id}`);
+      reply = "I'm not sure how to respond to that. Could you rephrase?";
+    }
+
     // Truncate if needed
-    let reply = result.text;
     if (reply.length > MAX_REPLY_LENGTH) {
       reply = reply.slice(0, MAX_REPLY_LENGTH - 1) + "...";
     }
