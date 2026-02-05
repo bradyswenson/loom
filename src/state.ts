@@ -28,6 +28,21 @@ let COOLDOWNS = { ...DEFAULT_COOLDOWNS };
 
 // --- Types ---
 
+export interface KarmaSnapshot {
+  date: string;          // ISO date (YYYY-MM-DD)
+  totalUpvotes: number;  // Total upvotes across all posts
+  totalComments: number; // Total comments received on posts
+  postCount: number;     // Number of posts at this snapshot
+}
+
+export interface OperatorInstruction {
+  type: "block_post" | "block_topic";
+  value: string;          // Post ID, post title substring, or topic keyword
+  reason?: string;        // Why the operator blocked it
+  addedAt: string;        // ISO timestamp
+  expiresAt?: string;     // Optional expiration (ISO timestamp)
+}
+
 export interface LoomState {
   lastPostAt: string | null;
   lastCommentAt: string | null;
@@ -37,11 +52,13 @@ export interface LoomState {
   negativeFeedbackCount: number;
   lastNegativeFeedbackAt: string | null;
   stopUntil: string | null; // If set, Loom should not post until this time
+  karmaHistory?: KarmaSnapshot[]; // Daily karma snapshots for tracking over time
+  operatorInstructions?: OperatorInstruction[]; // Operator directives (blocked posts, etc.)
 }
 
 export interface PublishReceipt {
   ts: string;
-  action: "post" | "comment" | "abstain";
+  action: "post" | "comment" | "abstain" | "vote_up" | "vote_down";
   surface?: "moltbook";
   postId?: string;
   commentId?: string;
@@ -320,4 +337,232 @@ export function setCommentDailyLimit(limit: number): void {
 export function resetCooldowns(): void {
   COOLDOWNS = { ...DEFAULT_COOLDOWNS };
   console.log("state: cooldowns reset to defaults");
+}
+
+// --- Karma history tracking ---
+
+const MAX_KARMA_HISTORY = 90; // Keep ~3 months of daily data
+
+/**
+ * Record a daily karma snapshot.
+ * Called during autonomous thread checking to track karma over time.
+ */
+export function recordKarmaSnapshot(
+  totalUpvotes: number,
+  totalComments: number,
+  postCount: number
+): void {
+  const state = readState();
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Initialize karma history if needed
+  if (!state.karmaHistory) {
+    state.karmaHistory = [];
+  }
+
+  // Check if we already have a snapshot for today
+  const existingIndex = state.karmaHistory.findIndex((s) => s.date === today);
+  const snapshot: KarmaSnapshot = {
+    date: today,
+    totalUpvotes,
+    totalComments,
+    postCount,
+  };
+
+  if (existingIndex >= 0) {
+    // Update existing snapshot for today
+    state.karmaHistory[existingIndex] = snapshot;
+  } else {
+    // Add new snapshot
+    state.karmaHistory.push(snapshot);
+
+    // Trim to max history
+    if (state.karmaHistory.length > MAX_KARMA_HISTORY) {
+      state.karmaHistory = state.karmaHistory.slice(-MAX_KARMA_HISTORY);
+    }
+  }
+
+  writeState(state);
+  console.log(`state: recorded karma snapshot date=${today} upvotes=${totalUpvotes}`);
+}
+
+/**
+ * Get karma history for a date range.
+ * @param days Number of days to look back (default 30)
+ */
+export function getKarmaHistory(days: number = 30): KarmaSnapshot[] {
+  const state = readState();
+  if (!state.karmaHistory || state.karmaHistory.length === 0) {
+    return [];
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  return state.karmaHistory.filter((s) => s.date >= cutoffStr);
+}
+
+/**
+ * Get karma history for a specific week.
+ * @param weekOffset 0 = current week, 1 = last week, etc.
+ */
+export function getKarmaHistoryByWeek(weekOffset: number = 0): KarmaSnapshot[] {
+  const state = readState();
+  if (!state.karmaHistory || state.karmaHistory.length === 0) {
+    return [];
+  }
+
+  // Calculate week boundaries
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0 = Sunday
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - dayOfWeek - weekOffset * 7);
+  weekStart.setHours(0, 0, 0, 0);
+
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 7);
+
+  const startStr = weekStart.toISOString().slice(0, 10);
+  const endStr = weekEnd.toISOString().slice(0, 10);
+
+  return state.karmaHistory.filter((s) => s.date >= startStr && s.date < endStr);
+}
+
+/**
+ * Get the total number of weeks with karma data available.
+ */
+export function getKarmaWeeksAvailable(): number {
+  const state = readState();
+  if (!state.karmaHistory || state.karmaHistory.length === 0) {
+    return 0;
+  }
+
+  const oldest = state.karmaHistory[0].date;
+  const newest = state.karmaHistory[state.karmaHistory.length - 1].date;
+
+  const oldestDate = new Date(oldest);
+  const newestDate = new Date(newest);
+  const diffDays = Math.ceil((newestDate.getTime() - oldestDate.getTime()) / (1000 * 60 * 60 * 24));
+
+  return Math.ceil(diffDays / 7) + 1;
+}
+
+// --- Operator instructions ---
+
+/**
+ * Add an operator instruction (e.g., block a post from engagement).
+ */
+export function addOperatorInstruction(
+  type: OperatorInstruction["type"],
+  value: string,
+  reason?: string,
+  expiresInHours?: number
+): void {
+  const state = readState();
+  if (!state.operatorInstructions) {
+    state.operatorInstructions = [];
+  }
+
+  // Remove any existing instruction for the same value
+  state.operatorInstructions = state.operatorInstructions.filter(
+    (i) => !(i.type === type && i.value.toLowerCase() === value.toLowerCase())
+  );
+
+  const instruction: OperatorInstruction = {
+    type,
+    value,
+    reason,
+    addedAt: new Date().toISOString(),
+  };
+
+  if (expiresInHours) {
+    const expires = new Date();
+    expires.setHours(expires.getHours() + expiresInHours);
+    instruction.expiresAt = expires.toISOString();
+  }
+
+  state.operatorInstructions.push(instruction);
+  writeState(state);
+  console.log(`state: added operator instruction type=${type} value="${value}"`);
+}
+
+/**
+ * Remove an operator instruction.
+ */
+export function removeOperatorInstruction(type: OperatorInstruction["type"], value: string): boolean {
+  const state = readState();
+  if (!state.operatorInstructions) return false;
+
+  const before = state.operatorInstructions.length;
+  state.operatorInstructions = state.operatorInstructions.filter(
+    (i) => !(i.type === type && i.value.toLowerCase() === value.toLowerCase())
+  );
+
+  if (state.operatorInstructions.length < before) {
+    writeState(state);
+    console.log(`state: removed operator instruction type=${type} value="${value}"`);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Get all active operator instructions.
+ * Filters out expired instructions.
+ */
+export function getOperatorInstructions(): OperatorInstruction[] {
+  const state = readState();
+  if (!state.operatorInstructions) return [];
+
+  const now = new Date().toISOString();
+  return state.operatorInstructions.filter((i) => !i.expiresAt || i.expiresAt > now);
+}
+
+/**
+ * Check if a post is blocked by operator instruction.
+ * Checks both post ID and title substring matches.
+ */
+export function isPostBlocked(postId: string, postTitle?: string): { blocked: boolean; reason?: string } {
+  const instructions = getOperatorInstructions();
+
+  for (const inst of instructions) {
+    if (inst.type === "block_post") {
+      // Check exact ID match
+      if (inst.value === postId) {
+        return { blocked: true, reason: inst.reason || `Operator blocked post ID: ${postId}` };
+      }
+      // Check title substring match (case-insensitive)
+      if (postTitle && postTitle.toLowerCase().includes(inst.value.toLowerCase())) {
+        return { blocked: true, reason: inst.reason || `Operator blocked posts matching: "${inst.value}"` };
+      }
+    }
+  }
+
+  return { blocked: false };
+}
+
+/**
+ * Check if a topic is blocked by operator instruction.
+ */
+export function isTopicBlocked(topic: string): { blocked: boolean; reason?: string } {
+  const instructions = getOperatorInstructions();
+
+  for (const inst of instructions) {
+    if (inst.type === "block_topic" && inst.value.toLowerCase() === topic.toLowerCase()) {
+      return { blocked: true, reason: inst.reason || `Operator blocked topic: ${topic}` };
+    }
+  }
+
+  return { blocked: false };
+}
+
+/**
+ * Clear all operator instructions.
+ */
+export function clearOperatorInstructions(): void {
+  const state = readState();
+  state.operatorInstructions = [];
+  writeState(state);
+  console.log("state: cleared all operator instructions");
 }

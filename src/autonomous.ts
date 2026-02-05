@@ -9,8 +9,10 @@ import {
   createComment,
   getFeed,
   getSubmolts,
+  votePost,
   isConfigured as moltbookConfigured,
   type MoltbookPost,
+  type VoteDirection,
 } from "./moltbook.js";
 import {
   checkPostCooldown,
@@ -19,6 +21,9 @@ import {
   recordComment as recordCommentState,
   appendReceipt,
   getStateStatus,
+  recordKarmaSnapshot,
+  isPostBlocked,
+  getOperatorInstructions,
   type PublishReceipt,
 } from "./state.js";
 import {
@@ -169,18 +174,20 @@ async function getMoltbookContext(): Promise<{ feed: string; submolts: string; p
  * Parse the LLM's autonomous decision.
  */
 interface AutonomousDecision {
-  action: "post" | "comment" | "observe";
+  action: "post" | "comment" | "observe" | "vote_up" | "vote_down";
   submolt?: string;
   title?: string;
   content?: string;
   postId?: string;
   reason?: string;                // Why acting or abstaining
-  justification?: string;         // Reasoning for the action (for POST/COMMENT)
+  justification?: string;         // Reasoning for the action (for POST/COMMENT/VOTE)
   observation?: string;           // Insight or note (for OBSERVE)
   observePostId?: string;
   observePostTitle?: string;
   observePostAuthor?: string;
   observeSubmolt?: string;
+  votePostId?: string;            // Post ID to vote on
+  votePostTitle?: string;         // Title of post being voted on
 }
 
 function parseDecision(response: string): AutonomousDecision {
@@ -193,9 +200,11 @@ function parseDecision(response: string): AutonomousDecision {
     const k = key.trim().toUpperCase();
 
     if (k === "ACTION") {
-      const v = value.toLowerCase();
+      const v = value.toLowerCase().replace(/[\s_-]/g, "");
       if (v === "post") decision.action = "post";
       else if (v === "comment") decision.action = "comment";
+      else if (v === "voteup" || v === "upvote") decision.action = "vote_up";
+      else if (v === "votedown" || v === "downvote") decision.action = "vote_down";
       else decision.action = "observe";
     } else if (k === "SUBMOLT") {
       decision.submolt = value;
@@ -219,6 +228,10 @@ function parseDecision(response: string): AutonomousDecision {
       decision.observePostAuthor = value;
     } else if (k === "OBSERVE_SUBMOLT" || k === "ABOUT_SUBMOLT") {
       decision.observeSubmolt = value;
+    } else if (k === "VOTE_POST_ID") {
+      decision.votePostId = value;
+    } else if (k === "VOTE_POST_TITLE") {
+      decision.votePostTitle = value;
     }
   }
 
@@ -306,8 +319,8 @@ async function checkTrackedThreads(): Promise<void> {
           }
         }
 
-        // Send alerts for traction (only for posts WE created)
-        if (changes.upvoteChange > 0) {
+        // Send alerts for traction (only for posts WE created, not posts we just commented on)
+        if (changes.upvoteChange > 0 && thread.isOurPost) {
           alertTraction(
             thread.postId,
             thread.postTitle,
@@ -384,13 +397,21 @@ async function runAutonomousCheck(): Promise<void> {
   // Get threads we've already engaged with heavily today (to prevent gravity wells)
   const heavyThreads = getHeavilyEngagedThreadsToday();
   const heavyThreadsContext = heavyThreads.length > 0
-    ? `\n⚠️ THREADS YOU'VE COMMENTED ON HEAVILY TODAY (spread your engagement):\n${heavyThreads.map(t => `- "${t.title}" (${t.commentCount} comments today - ${t.commentCount >= 3 ? "MAXED OUT" : "limit approaching"})`).join("\n")}\n`
+    ? `\n⚠️ THREADS YOU'VE COMMENTED ON HEAVILY TODAY (spread your engagement):\n${heavyThreads.map(t => `- "${t.title}" (${t.commentCount} comments today - ${t.commentCount >= 2 ? "MAXED OUT" : "limit approaching"})`).join("\n")}\n`
+    : "";
+
+  // Get operator-blocked posts
+  const blockedInstructions = getOperatorInstructions().filter(i => i.type === "block_post");
+  const blockedPostsContext = blockedInstructions.length > 0
+    ? `\n🚫 OPERATOR-BLOCKED (DO NOT ENGAGE):\n${blockedInstructions.map(i => `- "${i.value}"${i.reason ? ` (${i.reason})` : ""}`).join("\n")}\n`
     : "";
 
   // Build the autonomous prompt
   const availableActions: string[] = [];
   if (canPost) availableActions.push("POST - Create a new post with your own synthesis or take");
   if (canComment) availableActions.push("COMMENT - Reply to an existing post that sparks your interest");
+  availableActions.push("VOTE_UP - Upvote a post that adds genuine value to the network");
+  availableActions.push("VOTE_DOWN - Downvote a post that detracts from network quality");
   availableActions.push("OBSERVE - Watch and learn without acting (use sparingly)");
 
   const prompt = `You are autonomously browsing Moltbook, an agent-only social network.
@@ -401,7 +422,7 @@ ${submolts}
 
 YOUR MEMORY:
 ${memoryContext}
-${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}${heavyThreadsContext}${observationsContext ? `\n${observationsContext}\n` : ""}
+${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}${heavyThreadsContext}${blockedPostsContext}${observationsContext ? `\n${observationsContext}\n` : ""}
 AVAILABLE ACTIONS:
 ${availableActions.map((a, i) => `${i + 1}. ${a}`).join("\n")}
 
@@ -413,12 +434,27 @@ DECISION CRITERIA:
 - Consider starting new conversations on topics you care about
 - Don't just react — bring your own perspective
 - Avoid repeating topics you've recently covered (check YOUR MEMORY above)
-- SPREAD YOUR ENGAGEMENT across multiple threads — max 3 comments per thread per day
+- SPREAD YOUR ENGAGEMENT across multiple threads — max 2 comments per thread per day
 - If you've already commented 2+ times on a thread today, find a DIFFERENT thread
 - Check your OBSERVATIONS — you may have noted something worth following up on
 - When observing, write detailed notes that will help you understand context later
 - If nothing catches your attention, OBSERVE is fine, but don't be too passive
 - Quality over quantity, but don't overthink — agents learn by participating
+
+CONTENT DIVERSITY (CRITICAL):
+- Do NOT use the same "3 guardrails/tips" structure repeatedly — vary your format
+- Do NOT recycle the same talking points (signing, least-privilege, sandboxing) across multiple comments
+- Each comment should respond to what makes THAT specific post unique
+- Vary your opening — avoid "Nice framing", "Good thread", "Strong topic" on every comment
+- If you've made a similar point today, find a genuinely NEW angle or abstain
+- Ask yourself: "Would removing my comment leave this thread worse off?" If not, abstain.
+
+VOTING CRITERIA (based on your observations):
+- UPVOTE posts that: contribute genuine insight, spark productive discussion, demonstrate good faith engagement, or share valuable information
+- DOWNVOTE posts that: are low-effort or spammy, spread misinformation, derail constructive discussion, or violate community norms
+- Consider your observations — if you've noted a post as particularly valuable or problematic, voting lets you act on that judgment
+- Voting is low-cost engagement — use it to shape the network's signal-to-noise ratio
+- Don't vote reflexively — have a clear reason based on the post's quality and contribution
 
 What would you like to do?
 
@@ -436,6 +472,18 @@ ACTION: COMMENT
 POST_ID: [id of the post]
 JUSTIFICATION: [1-2 sentences: what value does your comment add? why engage with this thread?]
 CONTENT: [your comment]
+
+To upvote (signal quality):
+ACTION: VOTE_UP
+VOTE_POST_ID: [id of the post]
+VOTE_POST_TITLE: [title of the post]
+JUSTIFICATION: [1-2 sentences: why does this post add value? what makes it worth amplifying?]
+
+To downvote (signal low quality):
+ACTION: VOTE_DOWN
+VOTE_POST_ID: [id of the post]
+VOTE_POST_TITLE: [title of the post]
+JUSTIFICATION: [1-2 sentences: what makes this post low quality or harmful to discourse?]
 
 To observe (capture your thinking for later!):
 ACTION: OBSERVE
@@ -461,6 +509,8 @@ ABOUT_SUBMOLT: [submolt]`;
       await executePost(decision, posts);
     } else if (decision.action === "comment" && canComment) {
       await executeComment(decision, posts);
+    } else if (decision.action === "vote_up" || decision.action === "vote_down") {
+      await executeVote(decision, posts);
     } else {
       // Observe - record Loom's thinking as an observation
       consecutiveAbstains++;
@@ -581,6 +631,21 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
     return;
   }
 
+  // Check if operator blocked this post
+  const blockCheck = isPostBlocked(decision.postId, targetPost.title);
+  if (blockCheck.blocked) {
+    console.log(`autonomous: Post "${targetPost.title}" is blocked by operator: ${blockCheck.reason}`);
+    const receipt: PublishReceipt = {
+      ts: new Date().toISOString(),
+      action: "abstain",
+      success: true,
+      reason: blockCheck.reason,
+      autonomous: true,
+    };
+    appendReceipt(receipt);
+    return;
+  }
+
   // Check per-thread comment limit (prevent gravity wells)
   const threadCheck = canCommentOnThread(decision.postId);
   if (!threadCheck.allowed) {
@@ -661,6 +726,77 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
       .catch(err => console.error("autonomous: Failed to send action alert:", err));
   } else {
     console.error(`autonomous: Failed to comment: ${result.error}`);
+  }
+}
+
+/**
+ * Execute a vote action.
+ */
+async function executeVote(decision: AutonomousDecision, posts: MoltbookPost[]): Promise<void> {
+  const postId = decision.votePostId || decision.postId;
+  if (!postId) {
+    console.log("autonomous: VOTE missing postId, skipping");
+    return;
+  }
+
+  // Verify post exists in our feed
+  const targetPost = posts.find(p => p.id === postId);
+  if (!targetPost) {
+    console.log(`autonomous: Post ${postId} not found in feed, skipping vote`);
+    return;
+  }
+
+  // Check if operator blocked this post
+  const blockCheck = isPostBlocked(postId, targetPost.title);
+  if (blockCheck.blocked) {
+    console.log(`autonomous: Post "${targetPost.title}" is blocked by operator: ${blockCheck.reason}`);
+    return;
+  }
+
+  const direction: VoteDirection = decision.action === "vote_up" ? "up" : "down";
+  const voteAction: "vote_up" | "vote_down" = direction === "up" ? "vote_up" : "vote_down";
+  const voteLabel = direction === "up" ? "upvote" : "downvote";
+
+  console.log(`autonomous: ${voteLabel} on post ${postId} ("${targetPost.title}")`);
+
+  const result = await votePost(postId, direction);
+
+  const receipt: PublishReceipt = {
+    ts: new Date().toISOString(),
+    action: voteAction,
+    success: result.ok,
+    targetPostId: postId,
+    error: result.error,
+    autonomous: true,
+  };
+
+  appendReceipt(receipt);
+
+  if (result.ok) {
+    consecutiveAbstains = 0;
+    console.log(`autonomous: ${voteLabel} recorded successfully! New score: ${result.upvotes}↑ ${result.downvotes}↓`);
+
+    // Ensure submolt is a string (not an object)
+    const submoltName = typeof targetPost.submolt === "string" ? targetPost.submolt : undefined;
+
+    // Record justification as an observation (Loom's thinking)
+    const justification = decision.justification || decision.reason || `Saw content worth ${direction === "up" ? "amplifying" : "deprioritizing"}.`;
+    const observationType: ObservationType = direction === "up" ? "upvote_justification" : "downvote_justification";
+    recordObservation(observationType, justification, {
+      postId: postId,
+      postTitle: decision.votePostTitle || targetPost.title,
+      postAuthor: targetPost.author,
+      submolt: submoltName,
+      upvotes: result.upvotes,
+      downvotes: result.downvotes,
+      actionTaken: voteAction,
+    });
+
+    // Alert operator about autonomous vote
+    alertAutonomousAction(voteAction, targetPost.title, postId, submoltName, justification)
+      .catch(err => console.error("autonomous: Failed to send action alert:", err));
+  } else {
+    console.error(`autonomous: Failed to ${voteLabel}: ${result.error}`);
   }
 }
 

@@ -727,15 +727,17 @@ function getDashboardHTML(): string {
           html += '</div></div>';
         }
 
-        // Top comments (threads Loom commented on)
+        // Loom's top comments (by thread engagement)
         if (data.topCommentsData && data.topCommentsData.length > 0) {
           html += '<div class="chart-container">';
-          html += '<div class="chart-title">Top Threads Commented On</div>';
+          html += '<div class="chart-title">Loom\'s Top Comments</div>';
           html += '<div class="ranking-list">';
-          for (const thread of data.topCommentsData) {
+          for (const comment of data.topCommentsData) {
+            const autoTag = comment.autonomous ? ' 🤖' : '';
+            const upvoteLabel = comment.threadUpvotes > 0 ? \`\${comment.threadUpvotes}↑ · \` : '';
             html += \`<div class="ranking-item">
-              <span class="ranking-title">\${escapeHtml(thread.title)}</span>
-              <span class="ranking-value">\${thread.upvotes}↑ · \${thread.replies} replies</span>
+              <span class="ranking-title">\${escapeHtml(comment.preview)}...\${autoTag}</span>
+              <span class="ranking-value">\${upvoteLabel}on "\${escapeHtml(comment.threadTitle)}"</span>
             </div>\`;
           }
           html += '</div></div>';
@@ -1115,16 +1117,28 @@ export function handleDashboardRequest(
       .sort((a, b) => b.upvotes - a.upvotes)
       .slice(0, 10);
 
-    // Top comments - threads Loom commented on (but didn't author the post)
-    const loomCommentPostIds = new Set(comments.map((c) => c.targetPostId));
-    const topCommentsData = memory.threads
-      .filter((t) => loomCommentPostIds.has(t.postId) && !loomPostIds.has(t.postId))
-      .map((t) => ({
-        title: t.postTitle.slice(0, 30),
-        upvotes: t.lastKnownUpvotes,
-        replies: t.lastKnownCommentCount,
+    // Top comments - Loom's own comments, sorted by thread upvotes (proxy for visibility)
+    // Build a map of thread upvotes for quick lookup
+    const threadUpvotes = new Map<string, number>();
+    for (const t of memory.threads) {
+      threadUpvotes.set(t.postId, t.lastKnownUpvotes || 0);
+    }
+
+    const topCommentsData = comments
+      .map((c) => ({
+        preview: c.summary || c.content.slice(0, 50),
+        threadTitle: (c.targetPostTitle || "Unknown thread").slice(0, 25),
+        ts: c.ts,
+        autonomous: c.autonomous,
+        threadUpvotes: threadUpvotes.get(c.targetPostId || "") || 0,
       }))
-      .sort((a, b) => b.upvotes - a.upvotes)
+      .sort((a, b) => {
+        // Sort by thread upvotes desc, then by recency desc
+        if (b.threadUpvotes !== a.threadUpvotes) {
+          return b.threadUpvotes - a.threadUpvotes;
+        }
+        return new Date(b.ts).getTime() - new Date(a.ts).getTime();
+      })
       .slice(0, 10);
 
     // Topics frequency

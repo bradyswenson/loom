@@ -36,6 +36,7 @@ export interface ThreadEntry {
   ourCommentIds: string[];       // IDs of comments we made
   lastKnownCommentCount: number;
   lastKnownUpvotes: number;
+  isOurPost: boolean;            // True if Loom created the post, false if just commented
 }
 
 export interface SeenPost {
@@ -53,6 +54,8 @@ export type ObservationType =
   | "abstain"              // Why Loom decided not to act
   | "post_justification"   // Reasoning behind a post
   | "comment_justification" // Reasoning behind a comment
+  | "upvote_justification" // Reasoning behind an upvote
+  | "downvote_justification" // Reasoning behind a downvote
   | "insight"              // Pattern or insight noticed during browsing
   | "thread_limit";        // Hit per-thread engagement limit
 
@@ -65,10 +68,11 @@ export interface Observation {
   postAuthor?: string;           // Author of the post
   submolt?: string;              // Submolt where post was seen
   upvotes?: number;              // Engagement at time of observation
+  downvotes?: number;            // Downvotes at time of observation
   commentCount?: number;
   note: string;                  // Loom's thought/observation
   topics: string[];              // Related topics
-  actionTaken?: string;          // For justifications: "post" or "comment"
+  actionTaken?: string;          // For justifications: "post", "comment", "vote_up", "vote_down"
   contentPreview?: string;       // Preview of what was posted/commented
 }
 
@@ -197,7 +201,7 @@ export function recordPost(
 
   memory.entries.push(entry);
 
-  // Also start tracking this thread
+  // Also start tracking this thread (we created it)
   const thread: ThreadEntry = {
     postId,
     postTitle: title,
@@ -207,6 +211,7 @@ export function recordPost(
     ourCommentIds: [],
     lastKnownCommentCount: 0,
     lastKnownUpvotes: 0,
+    isOurPost: true,  // We created this post
   };
   memory.threads.push(thread);
 
@@ -248,6 +253,7 @@ export function recordComment(
     thread.ourCommentIds.push(commentId);
     thread.lastCheckedAt = entry.ts;
   } else {
+    // We're commenting on someone else's post (not our own)
     thread = {
       postId: targetPostId,
       postTitle: targetPostTitle,
@@ -257,6 +263,7 @@ export function recordComment(
       ourCommentIds: [commentId],
       lastKnownCommentCount: 0,
       lastKnownUpvotes: 0,
+      isOurPost: false,  // We didn't create this post, just commented on it
     };
     memory.threads.push(thread);
   }
@@ -394,7 +401,8 @@ function getAgeString(ts: string): string {
 }
 
 // Maximum comments per thread per day to prevent "gravity well" over-engagement
-const MAX_COMMENTS_PER_THREAD_PER_DAY = 3;
+// Reduced from 3 to 2 to encourage more diverse engagement across threads
+const MAX_COMMENTS_PER_THREAD_PER_DAY = 2;
 
 /**
  * Get the number of comments we've made on a specific thread today.
@@ -683,6 +691,7 @@ export function recordObservation(
     postAuthor?: string;
     submolt?: string;
     upvotes?: number;
+    downvotes?: number;
     commentCount?: number;
     topics?: string[];
     actionTaken?: string;
@@ -706,6 +715,7 @@ export function recordObservation(
     postAuthor: opts.postAuthor,
     submolt: opts.submolt,
     upvotes: opts.upvotes,
+    downvotes: opts.downvotes,
     commentCount: opts.commentCount,
     note,
     topics: extractedTopics,
@@ -724,6 +734,8 @@ export function recordObservation(
   writeMemory(memory);
   const typeLabel = type === "post_justification" ? "post justification" :
                     type === "comment_justification" ? "comment justification" :
+                    type === "upvote_justification" ? "upvote justification" :
+                    type === "downvote_justification" ? "downvote justification" :
                     type === "thread_limit" ? "thread limit" : type;
   console.log(`memory: recorded ${typeLabel}${opts.postTitle ? ` re: "${opts.postTitle}"` : ""}`);
 }

@@ -20,6 +20,10 @@ import {
   setCommentCooldownMinutes,
   setCommentDailyLimit,
   resetCooldowns,
+  addOperatorInstruction,
+  removeOperatorInstruction,
+  getOperatorInstructions,
+  clearOperatorInstructions,
   type PublishReceipt,
 } from "./state.js";
 import {
@@ -436,6 +440,60 @@ function parseAutonomousCommand(text: string): { cmd: CommandType; param?: numbe
   }
   if (/^alerts?\s+(off|disable)/.test(lower) || /^disable\s+alerts?/.test(lower)) {
     return { cmd: "alerts_off" };
+  }
+
+  return null;
+}
+
+/**
+ * Parse block/unblock instructions from operator.
+ * Recognizes patterns like:
+ * - "don't comment on X"
+ * - "stop commenting on X"
+ * - "don't engage with X"
+ * - "block X" / "unblock X"
+ * - "allow X" (removes block)
+ */
+function parseBlockInstruction(text: string): { action: "block" | "unblock" | "list" | "clear"; target?: string } | null {
+  const lower = text.toLowerCase().trim();
+
+  // List blocked posts
+  if (/^(list|show)\s+(blocked|blocks)/.test(lower) || lower === "blocked" || lower === "blocks") {
+    return { action: "list" };
+  }
+
+  // Clear all blocks
+  if (/^clear\s+(all\s+)?blocks/.test(lower) || /^unblock\s+all/.test(lower)) {
+    return { action: "clear" };
+  }
+
+  // Block patterns - extract the target (post title or keyword)
+  const blockPatterns = [
+    /(?:don'?t|do\s+not|stop)\s+(?:comment(?:ing)?|engage?(?:ing)?|post(?:ing)?)\s+(?:on|with|about)\s+[""]?(.+?)[""]?$/i,
+    /(?:don'?t|do\s+not|stop)\s+(?:comment(?:ing)?|engage?(?:ing)?|post(?:ing)?)\s+(?:on|with|about)\s+[""]?(.+?)[""]?\s+(?:anymore|any\s+more|again)/i,
+    /block\s+(?:post\s+)?[""]?(.+?)[""]?$/i,
+    /ignore\s+(?:post\s+)?[""]?(.+?)[""]?$/i,
+  ];
+
+  for (const pattern of blockPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return { action: "block", target: match[1].trim() };
+    }
+  }
+
+  // Unblock patterns
+  const unblockPatterns = [
+    /unblock\s+[""]?(.+?)[""]?$/i,
+    /allow\s+(?:comments?\s+on\s+)?[""]?(.+?)[""]?$/i,
+    /(?:you\s+can|ok\s+to)\s+(?:comment|engage|post)\s+(?:on|with)\s+[""]?(.+?)[""]?$/i,
+  ];
+
+  for (const pattern of unblockPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return { action: "unblock", target: match[1].trim() };
+    }
   }
 
   return null;
@@ -1064,6 +1122,53 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       await message.reply({ content: report });
       console.log(`discord: sent memory report to msg=${message.id}`);
       return;
+    }
+
+    // Check for block/unblock instructions
+    const blockCmd = parseBlockInstruction(text);
+    if (blockCmd) {
+      switch (blockCmd.action) {
+        case "list": {
+          const instructions = getOperatorInstructions();
+          if (instructions.length === 0) {
+            await message.reply({ content: "No posts are currently blocked." });
+          } else {
+            const lines = ["**Blocked Posts:**"];
+            for (const inst of instructions) {
+              lines.push(`• "${inst.value}"${inst.reason ? ` — ${inst.reason}` : ""}`);
+            }
+            await message.reply({ content: lines.join("\n") });
+          }
+          console.log(`discord: listed blocks from msg=${message.id}`);
+          return;
+        }
+        case "clear": {
+          clearOperatorInstructions();
+          await message.reply({ content: "✅ Cleared all blocked posts." });
+          console.log(`discord: cleared all blocks from msg=${message.id}`);
+          return;
+        }
+        case "block": {
+          if (blockCmd.target) {
+            addOperatorInstruction("block_post", blockCmd.target, `Blocked by operator via Discord`);
+            await message.reply({ content: `🚫 Got it — I won't engage with posts matching "${blockCmd.target}".` });
+            console.log(`discord: blocked "${blockCmd.target}" from msg=${message.id}`);
+          }
+          return;
+        }
+        case "unblock": {
+          if (blockCmd.target) {
+            const removed = removeOperatorInstruction("block_post", blockCmd.target);
+            if (removed) {
+              await message.reply({ content: `✅ Unblocked "${blockCmd.target}". I can engage with it again.` });
+            } else {
+              await message.reply({ content: `"${blockCmd.target}" wasn't in my blocked list.` });
+            }
+            console.log(`discord: unblocked "${blockCmd.target}" from msg=${message.id}`);
+          }
+          return;
+        }
+      }
     }
 
     // Check for autonomous mode commands

@@ -198,6 +198,58 @@ export async function getSubmolts(): Promise<{
   return { ok: true, submolts: result.data?.submolts };
 }
 
+// --- Voting ---
+
+export type VoteDirection = "up" | "down" | "none";
+
+export interface VoteResult {
+  ok: boolean;
+  upvotes?: number;
+  downvotes?: number;
+  error?: string;
+}
+
+/**
+ * Vote on a post (upvote, downvote, or remove vote).
+ */
+export async function votePost(
+  postId: string,
+  direction: VoteDirection
+): Promise<VoteResult> {
+  const result = await request<{ upvotes: number; downvotes: number }>(
+    "POST",
+    `/posts/${postId}/vote`,
+    { direction }
+  );
+  if (!result.ok) return { ok: false, error: result.error };
+  return {
+    ok: true,
+    upvotes: result.data?.upvotes,
+    downvotes: result.data?.downvotes,
+  };
+}
+
+/**
+ * Vote on a comment (upvote, downvote, or remove vote).
+ */
+export async function voteComment(
+  postId: string,
+  commentId: string,
+  direction: VoteDirection
+): Promise<VoteResult> {
+  const result = await request<{ upvotes: number; downvotes: number }>(
+    "POST",
+    `/posts/${postId}/comments/${commentId}/vote`,
+    { direction }
+  );
+  if (!result.ok) return { ok: false, error: result.error };
+  return {
+    ok: true,
+    upvotes: result.data?.upvotes,
+    downvotes: result.data?.downvotes,
+  };
+}
+
 // --- Status check ---
 
 export async function checkConnection(): Promise<{ ok: boolean; agent?: string; error?: string }> {

@@ -153,11 +153,11 @@ export async function alertTraction(
 }
 
 /**
- * Alert when Loom posts or comments autonomously.
+ * Alert when Loom posts, comments, or votes autonomously.
  * Always attaches md file with full content for reference.
  */
 export async function alertAutonomousAction(
-  action: "post" | "comment",
+  action: "post" | "comment" | "vote_up" | "vote_down",
   title: string,
   postId: string,
   submolt?: string,
@@ -170,8 +170,13 @@ export async function alertAutonomousAction(
   if (alertedEvents.has(key)) return;
   alertedEvents.add(key);
 
-  const emoji = action === "post" ? "📝" : "💬";
-  const actionText = action === "post" ? "posted" : "commented on";
+  const isVote = action === "vote_up" || action === "vote_down";
+  const emoji = action === "post" ? "📝" :
+                action === "comment" ? "💬" :
+                action === "vote_up" ? "👍" : "👎";
+  const actionText = action === "post" ? "posted" :
+                     action === "comment" ? "commented on" :
+                     action === "vote_up" ? "upvoted" : "downvoted";
   const locationText = submolt ? ` in ${submolt}` : "";
 
   let message = `${emoji} **Loom ${actionText}${locationText}**\n\n` +
@@ -186,20 +191,25 @@ export async function alertAutonomousAction(
     const preview = fullContent.slice(0, MAX_PREVIEW);
     const truncated = fullContent.length > MAX_PREVIEW;
     message += `\n\n>>> ${preview}${truncated ? "..." : ""}`;
-    if (truncated) {
+    if (truncated && !isVote) {
       message += `\n\n_(Full ${action} attached)_`;
     }
 
-    // Always attach full content as MD file
-    attachment = {
-      content: `# Loom ${action === "post" ? "Post" : "Comment"}\n\n` +
-        `**${action === "post" ? "Title" : "On"}:** ${title}\n` +
-        `**Submolt:** ${submolt || "general"}\n` +
-        `**Time:** ${new Date().toISOString()}\n` +
-        `**Link:** https://www.moltbook.com/post/${postId}\n\n` +
-        `---\n\n${fullContent}`,
-      filename: `loom-${action}-${Date.now()}.md`,
-    };
+    // Attach full content as MD file (not for votes unless there's a long justification)
+    if (!isVote || fullContent.length > MAX_PREVIEW) {
+      const actionLabel = action === "post" ? "Post" :
+                          action === "comment" ? "Comment" :
+                          action === "vote_up" ? "Upvote" : "Downvote";
+      attachment = {
+        content: `# Loom ${actionLabel}\n\n` +
+          `**${action === "post" ? "Title" : "On"}:** ${title}\n` +
+          `**Submolt:** ${submolt || "general"}\n` +
+          `**Time:** ${new Date().toISOString()}\n` +
+          `**Link:** https://www.moltbook.com/post/${postId}\n\n` +
+          `---\n\n${fullContent}`,
+        filename: `loom-${action}-${Date.now()}.md`,
+      };
+    }
   }
 
   // Wrap URL in <> to prevent Discord link preview
