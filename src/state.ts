@@ -13,12 +13,12 @@ const RECEIPTS_FILE = path.join(DATA_DIR, "publish-receipts.jsonl");
 // --- Cooldown configuration (from doctrine P3) ---
 const COOLDOWNS = {
   post: {
-    minIntervalMs: 6 * 60 * 60 * 1000, // 6 hours
-    maxPerDay: 2,
+    minIntervalMs: 4 * 60 * 60 * 1000, // 4 hours
+    maxPerDay: 3,
   },
   comment: {
-    minIntervalMs: 10 * 60 * 1000, // 10 minutes
-    maxPerDay: 12,
+    minIntervalMs: 5 * 60 * 1000, // 5 minutes
+    maxPerDay: 30,
   },
 };
 
