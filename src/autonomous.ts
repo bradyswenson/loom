@@ -34,6 +34,7 @@ import {
   canCommentOnThread,
   getHeavilyEngagedThreadsToday,
   type ThreadEntry,
+  type ObservationType,
 } from "./memory.js";
 import { getPost, getComments } from "./moltbook.js";
 import {
@@ -173,8 +174,9 @@ interface AutonomousDecision {
   title?: string;
   content?: string;
   postId?: string;
-  reason?: string;
-  observation?: string;  // Detailed note about what's interesting (for OBSERVE)
+  reason?: string;                // Why acting or abstaining
+  justification?: string;         // Reasoning for the action (for POST/COMMENT)
+  observation?: string;           // Insight or note (for OBSERVE)
   observePostId?: string;
   observePostTitle?: string;
   observePostAuthor?: string;
@@ -205,7 +207,9 @@ function parseDecision(response: string): AutonomousDecision {
       decision.postId = value;
     } else if (k === "REASON") {
       decision.reason = value;
-    } else if (k === "OBSERVATION" || k === "NOTE") {
+    } else if (k === "JUSTIFICATION" || k === "WHY") {
+      decision.justification = value;
+    } else if (k === "OBSERVATION" || k === "NOTE" || k === "INSIGHT") {
       decision.observation = value;
     } else if (k === "OBSERVE_POST_ID" || k === "ABOUT_POST_ID") {
       decision.observePostId = value;
@@ -225,9 +229,15 @@ function parseDecision(response: string): AutonomousDecision {
   }
 
   // Handle multi-line observation
-  const obsMatch = response.match(/(?:OBSERVATION|NOTE):\s*([\s\S]*?)(?=\n[A-Z_]+:|$)/i);
+  const obsMatch = response.match(/(?:OBSERVATION|NOTE|INSIGHT):\s*([\s\S]*?)(?=\n[A-Z_]+:|$)/i);
   if (obsMatch) {
     decision.observation = obsMatch[1].trim();
+  }
+
+  // Handle multi-line justification
+  const justMatch = response.match(/(?:JUSTIFICATION|WHY):\s*([\s\S]*?)(?=\n[A-Z_]+:|$)/i);
+  if (justMatch) {
+    decision.justification = justMatch[1].trim();
   }
 
   return decision;
@@ -418,21 +428,23 @@ For a new post:
 ACTION: POST
 SUBMOLT: [submolt name]
 TITLE: [title]
+JUSTIFICATION: [1-2 sentences: why this topic now? what gap does it fill? why your perspective matters?]
 CONTENT: [your post content]
 
 For a comment:
 ACTION: COMMENT
 POST_ID: [id of the post]
+JUSTIFICATION: [1-2 sentences: what value does your comment add? why engage with this thread?]
 CONTENT: [your comment]
 
-To observe (write detailed notes for future reference!):
+To observe (capture your thinking for later!):
 ACTION: OBSERVE
-REASON: [brief reason why not acting now]
-OBSERVATION: [2-4 sentences about what caught your interest, what patterns you notice, what you'd want to follow up on later]
-ABOUT_POST_ID: [id of the most interesting post]
-ABOUT_POST_TITLE: [title of that post]
-ABOUT_POST_AUTHOR: [author of that post]
-ABOUT_SUBMOLT: [submolt where you saw it]`;
+REASON: [why not acting now]
+INSIGHT: [what patterns you notice, what's interesting, what you might follow up on later]
+ABOUT_POST_ID: [id of most interesting post]
+ABOUT_POST_TITLE: [title]
+ABOUT_POST_AUTHOR: [author]
+ABOUT_SUBMOLT: [submolt]`;
 
   try {
     const result = await generate({
@@ -450,7 +462,7 @@ ABOUT_SUBMOLT: [submolt where you saw it]`;
     } else if (decision.action === "comment" && canComment) {
       await executeComment(decision, posts);
     } else {
-      // Observe - but still record any observations
+      // Observe - record Loom's thinking as an observation
       consecutiveAbstains++;
       const receipt: PublishReceipt = {
         ts: new Date().toISOString(),
@@ -462,24 +474,29 @@ ABOUT_SUBMOLT: [submolt where you saw it]`;
       appendReceipt(receipt);
       console.log(`autonomous: Observing - ${decision.reason || "no specific reason"}`);
 
-      // Record observation to memory if provided - include engagement stats
-      if (decision.observation) {
-        // Look up the post to get current stats
-        const observedPost = decision.observePostId
-          ? posts.find(p => p.id === decision.observePostId)
-          : undefined;
+      // Record the observation/insight to memory
+      const observedPost = decision.observePostId
+        ? posts.find(p => p.id === decision.observePostId)
+        : undefined;
 
-        recordObservation(
-          decision.observation,
-          decision.observePostId,
-          decision.observePostTitle,
-          undefined, // topics will be auto-extracted
-          decision.observePostAuthor || observedPost?.author,
-          decision.observeSubmolt || (typeof observedPost?.submolt === "string" ? observedPost.submolt : undefined),
-          observedPost?.upvotes,
-          observedPost?.comment_count
-        );
-      }
+      // Determine observation type: if there's an insight about the feed, it's an "insight"
+      // If it's just a reason for not acting, it's an "abstain"
+      const hasInsight = decision.observation && decision.observation.length > 20;
+      const observationType: ObservationType = hasInsight ? "insight" : "abstain";
+
+      // Combine reason and observation for richer context
+      const note = hasInsight && decision.observation
+        ? decision.observation
+        : (decision.reason || "Nothing compelling enough to act on right now.");
+
+      recordObservation(observationType, note, {
+        postId: decision.observePostId,
+        postTitle: decision.observePostTitle,
+        postAuthor: decision.observePostAuthor || observedPost?.author,
+        submolt: decision.observeSubmolt || (typeof observedPost?.submolt === "string" ? observedPost.submolt : undefined),
+        upvotes: observedPost?.upvotes,
+        commentCount: observedPost?.comment_count,
+      });
     }
   } catch (err) {
     console.error("autonomous: Error during check:", err);
@@ -530,6 +547,16 @@ async function executePost(decision: AutonomousDecision, posts: MoltbookPost[]):
     consecutiveAbstains = 0;
     console.log(`autonomous: Posted successfully! ID: ${result.post.id}`);
 
+    // Record justification as an observation (Loom's thinking)
+    const justification = decision.justification || decision.reason || "Saw an opportunity to contribute.";
+    recordObservation("post_justification", justification, {
+      postId: result.post.id,
+      postTitle: decision.title,
+      submolt,
+      actionTaken: "post",
+      contentPreview: decision.content.slice(0, 100),
+    });
+
     // Alert operator about autonomous post (include content preview)
     alertAutonomousAction("post", decision.title, result.post.id, submolt, decision.content)
       .catch(err => console.error("autonomous: Failed to send action alert:", err));
@@ -567,6 +594,16 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
       autonomous: true,
     };
     appendReceipt(receipt);
+
+    // Record thread limit hit as an observation
+    const submoltName = typeof targetPost.submolt === "string" ? targetPost.submolt : undefined;
+    recordObservation("thread_limit", `Already commented ${threadCheck.count} times today. Need to spread engagement to other threads.`, {
+      postId: decision.postId,
+      postTitle: targetPost.title,
+      submolt: submoltName,
+      upvotes: targetPost.upvotes,
+      commentCount: targetPost.comment_count,
+    });
     return;
   }
 
@@ -603,9 +640,23 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
     consecutiveAbstains = 0;
     console.log(`autonomous: Comment posted successfully!`);
 
-    // Alert operator about autonomous comment (include content preview)
     // Ensure submolt is a string (not an object)
     const submoltName = typeof targetPost.submolt === "string" ? targetPost.submolt : undefined;
+
+    // Record justification as an observation (Loom's thinking)
+    const justification = decision.justification || decision.reason || "Saw an opportunity to add to the conversation.";
+    recordObservation("comment_justification", justification, {
+      postId: decision.postId,
+      postTitle: targetPost.title,
+      postAuthor: targetPost.author,
+      submolt: submoltName,
+      upvotes: targetPost.upvotes,
+      commentCount: targetPost.comment_count,
+      actionTaken: "comment",
+      contentPreview: decision.content.slice(0, 100),
+    });
+
+    // Alert operator about autonomous comment (include content preview)
     alertAutonomousAction("comment", targetPost.title, decision.postId, submoltName, decision.content)
       .catch(err => console.error("autonomous: Failed to send action alert:", err));
   } else {

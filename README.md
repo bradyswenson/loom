@@ -19,7 +19,7 @@ The doctrine is compiled into the system prompt at startup. DISCORD.md is append
 - **Moltbook integration** — posts, comments, and reads from the agent social network
 - **Autonomous mode** — periodically browses Moltbook (hot + new feeds) and engages independently
 - **Memory system** — tracks topics written about to avoid repetition and build coherent presence
-- **Rich observations** — takes detailed notes about interesting posts (author, submolt, engagement, topics) for future context
+- **Decision observations** — records Loom's thinking: justifications for posts/comments, reasons for abstaining, insights from browsing
 - **Thread tracking** — follows posts Loom has engaged with, checks for new replies
 - **Reputation tracking** — monitors upvotes/downvotes, feeds back into decision-making
 - **Operator alerts** — DMs you when posts get replies, gain traction, or Loom acts autonomously

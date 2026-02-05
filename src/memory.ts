@@ -49,9 +49,17 @@ export interface SeenPost {
   seenAt: string;                // ISO timestamp
 }
 
+export type ObservationType =
+  | "abstain"              // Why Loom decided not to act
+  | "post_justification"   // Reasoning behind a post
+  | "comment_justification" // Reasoning behind a comment
+  | "insight"              // Pattern or insight noticed during browsing
+  | "thread_limit";        // Hit per-thread engagement limit
+
 export interface Observation {
   id: string;
   ts: string;                    // ISO timestamp
+  type: ObservationType;         // What kind of observation this is
   postId?: string;               // Post this observation is about (if any)
   postTitle?: string;
   postAuthor?: string;           // Author of the post
@@ -60,6 +68,8 @@ export interface Observation {
   commentCount?: number;
   note: string;                  // Loom's thought/observation
   topics: string[];              // Related topics
+  actionTaken?: string;          // For justifications: "post" or "comment"
+  contentPreview?: string;       // Preview of what was posted/commented
 }
 
 export interface LoomMemory {
@@ -656,36 +666,51 @@ export function getBrowseContext(): string {
 }
 
 /**
- * Record an observation about something interesting.
+ * Record an observation - Loom's thinking about decisions.
+ * Types:
+ * - "abstain": Why Loom decided not to act
+ * - "post_justification": Reasoning behind posting
+ * - "comment_justification": Reasoning behind commenting
+ * - "insight": Pattern or insight noticed during browsing
+ * - "thread_limit": Hit per-thread engagement limit
  */
 export function recordObservation(
+  type: ObservationType,
   note: string,
-  postId?: string,
-  postTitle?: string,
-  topics?: string[],
-  postAuthor?: string,
-  submolt?: string,
-  upvotes?: number,
-  commentCount?: number
+  options?: {
+    postId?: string;
+    postTitle?: string;
+    postAuthor?: string;
+    submolt?: string;
+    upvotes?: number;
+    commentCount?: number;
+    topics?: string[];
+    actionTaken?: string;
+    contentPreview?: string;
+  }
 ): void {
   const memory = readMemory();
+  const opts = options || {};
 
   // Auto-extract topics from the observation note if not provided
-  const extractedTopics = topics && topics.length > 0
-    ? topics
-    : extractTopics(postTitle || "", note);
+  const extractedTopics = opts.topics && opts.topics.length > 0
+    ? opts.topics
+    : extractTopics(opts.postTitle || "", note);
 
   const observation: Observation = {
     id: `obs-${Date.now()}`,
     ts: new Date().toISOString(),
-    postId,
-    postTitle,
-    postAuthor,
-    submolt,
-    upvotes,
-    commentCount,
+    type,
+    postId: opts.postId,
+    postTitle: opts.postTitle,
+    postAuthor: opts.postAuthor,
+    submolt: opts.submolt,
+    upvotes: opts.upvotes,
+    commentCount: opts.commentCount,
     note,
     topics: extractedTopics,
+    actionTaken: opts.actionTaken,
+    contentPreview: opts.contentPreview,
   };
 
   memory.observations = memory.observations || [];
@@ -697,7 +722,10 @@ export function recordObservation(
   }
 
   writeMemory(memory);
-  console.log(`memory: recorded observation${postTitle ? ` about "${postTitle}"` : ""}${submolt ? ` in ${submolt}` : ""}`);
+  const typeLabel = type === "post_justification" ? "post justification" :
+                    type === "comment_justification" ? "comment justification" :
+                    type === "thread_limit" ? "thread limit" : type;
+  console.log(`memory: recorded ${typeLabel}${opts.postTitle ? ` re: "${opts.postTitle}"` : ""}`);
 }
 
 /**
@@ -709,7 +737,18 @@ export function getRecentObservations(limit: number = 10): Observation[] {
 }
 
 /**
- * Get observations context for conversations.
+ * Get observations by type.
+ */
+export function getObservationsByType(type: ObservationType, limit: number = 10): Observation[] {
+  const memory = readMemory();
+  return (memory.observations || [])
+    .filter(o => o.type === type)
+    .slice(-limit);
+}
+
+/**
+ * Get observations context for autonomous browsing.
+ * Groups by type for clearer context.
  */
 export function getObservationsContext(limit: number = 10): string {
   const obs = getRecentObservations(limit);
@@ -717,20 +756,50 @@ export function getObservationsContext(limit: number = 10): string {
     return "";
   }
 
-  const lines = ["MY RECENT OBSERVATIONS (things I noticed but didn't act on):"];
-  for (const o of obs) {
-    const age = Math.round((Date.now() - new Date(o.ts).getTime()) / 60000);
-    const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+  // Group observations by type
+  const insights = obs.filter(o => o.type === "insight" || o.type === "abstain");
+  const justifications = obs.filter(o => o.type === "post_justification" || o.type === "comment_justification");
+  const limits = obs.filter(o => o.type === "thread_limit");
 
-    let context = "";
-    if (o.postTitle) {
-      const submoltTag = o.submolt ? `[${o.submolt}] ` : "";
-      const authorTag = o.postAuthor ? ` by ${o.postAuthor}` : "";
-      const statsTag = o.upvotes !== undefined ? ` (${o.upvotes}↑, ${o.commentCount || 0} replies)` : "";
-      context = `\n  Post: ${submoltTag}"${o.postTitle.slice(0, 50)}${o.postTitle.length > 50 ? "..." : ""}"${authorTag}${statsTag}`;
+  const lines: string[] = [];
+
+  // Recent thinking/insights (most useful for context)
+  if (insights.length > 0) {
+    lines.push("MY RECENT THINKING (insights & abstain reasoning):");
+    for (const o of insights.slice(-5)) {
+      const age = Math.round((Date.now() - new Date(o.ts).getTime()) / 60000);
+      const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+      const typeIcon = o.type === "abstain" ? "⏸️" : "💡";
+
+      let context = "";
+      if (o.postTitle) {
+        const submoltTag = o.submolt ? `[${o.submolt}] ` : "";
+        context = ` → ${submoltTag}"${o.postTitle.slice(0, 40)}${o.postTitle.length > 40 ? "..." : ""}"`;
+      }
+      lines.push(`${typeIcon} ${ageStr}${context}: ${o.note}`);
     }
-    const topicsTag = o.topics.length > 0 ? `\n  Topics: ${o.topics.join(", ")}` : "";
-    lines.push(`• ${ageStr}: ${o.note}${context}${topicsTag}`);
+  }
+
+  // Recent justifications (what I was thinking when I did act)
+  if (justifications.length > 0) {
+    lines.push("");
+    lines.push("WHY I ACTED (recent post/comment reasoning):");
+    for (const o of justifications.slice(-3)) {
+      const age = Math.round((Date.now() - new Date(o.ts).getTime()) / 60000);
+      const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+      const typeIcon = o.type === "post_justification" ? "📝" : "💬";
+      const preview = o.contentPreview ? ` "${o.contentPreview.slice(0, 50)}..."` : "";
+      lines.push(`${typeIcon} ${ageStr}: ${o.note}${preview}`);
+    }
+  }
+
+  // Thread limits hit (useful to know what to avoid)
+  if (limits.length > 0) {
+    lines.push("");
+    lines.push("ENGAGEMENT LIMITS HIT:");
+    for (const o of limits.slice(-3)) {
+      lines.push(`⚠️ ${o.postTitle ? `"${o.postTitle.slice(0, 40)}..."` : "Thread"} - ${o.note}`);
+    }
   }
 
   return lines.join("\n");
