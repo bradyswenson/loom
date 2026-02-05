@@ -29,6 +29,8 @@ import {
   recordComment as recordCommentMemory,
   getMemoryStats,
   getReputationStats,
+  readMemory,
+  getBrowseContext,
 } from "./memory.js";
 import {
   initAlerts,
@@ -150,6 +152,96 @@ function isActivityRequest(text: string): boolean {
     /^history$/i,
   ];
   return patterns.some(p => p.test(text.trim()));
+}
+
+/**
+ * Check if message is a memory request.
+ */
+function isMemoryRequest(text: string): boolean {
+  const patterns = [
+    /^memory$/i,
+    /^what do you remember/i,
+    /^what have you learned/i,
+    /^show (me )?(your )?memory/i,
+    /^threads$/i,
+    /^tracked threads$/i,
+  ];
+  return patterns.some(p => p.test(text.trim()));
+}
+
+/**
+ * Format memory report for Discord.
+ */
+function formatMemoryReport(): string {
+  const memory = readMemory();
+  const lines: string[] = ["**Loom Memory Report**", ""];
+
+  // Recent posts
+  if (memory.entries.length === 0) {
+    lines.push("📝 **Posts & Comments:** None yet");
+  } else {
+    const posts = memory.entries.filter(e => e.type === "post").slice(-5);
+    const comments = memory.entries.filter(e => e.type === "comment").slice(-5);
+
+    lines.push(`📝 **Recent Posts** (${memory.entries.filter(e => e.type === "post").length} total)`);
+    if (posts.length === 0) {
+      lines.push("• None yet");
+    } else {
+      for (const p of posts) {
+        const age = Math.round((Date.now() - new Date(p.ts).getTime()) / 3600000);
+        const auto = p.autonomous ? " 🤖" : "";
+        lines.push(`• "${p.title?.slice(0, 40)}${(p.title?.length ?? 0) > 40 ? "..." : ""}"${auto} (${age}h ago)`);
+      }
+    }
+
+    lines.push("");
+    lines.push(`💬 **Recent Comments** (${memory.entries.filter(e => e.type === "comment").length} total)`);
+    if (comments.length === 0) {
+      lines.push("• None yet");
+    } else {
+      for (const c of comments) {
+        const age = Math.round((Date.now() - new Date(c.ts).getTime()) / 3600000);
+        const auto = c.autonomous ? " 🤖" : "";
+        lines.push(`• On "${c.targetPostTitle?.slice(0, 30)}..."${auto} (${age}h ago)`);
+      }
+    }
+  }
+
+  // Tracked threads
+  lines.push("");
+  lines.push(`🧵 **Tracked Threads** (${memory.threads.length})`);
+  if (memory.threads.length === 0) {
+    lines.push("• None yet — will track posts after engaging");
+  } else {
+    for (const t of memory.threads.slice(-5)) {
+      lines.push(`• "${t.postTitle.slice(0, 35)}${t.postTitle.length > 35 ? "..." : ""}" (${t.lastKnownUpvotes}↑, ${t.lastKnownCommentCount} replies)`);
+    }
+  }
+
+  // Topics
+  lines.push("");
+  const stats = getMemoryStats();
+  if (stats.topTopics.length > 0) {
+    lines.push(`🏷️ **Top Topics:** ${stats.topTopics.join(", ")}`);
+  } else {
+    lines.push("🏷️ **Topics:** None tracked yet");
+  }
+
+  // Recent browse
+  const browse = memory.recentBrowse || [];
+  lines.push("");
+  if (browse.length === 0) {
+    lines.push("👀 **Last Browse:** None yet");
+  } else {
+    const browseAge = Math.round((Date.now() - new Date(browse[0].seenAt).getTime()) / 60000);
+    lines.push(`👀 **Last Browse** (${browseAge}m ago, ${browse.length} posts)`);
+    for (const p of browse.slice(0, 5)) {
+      const submoltTag = p.submolt ? `[${p.submolt}]` : "";
+      lines.push(`• ${submoltTag} "${p.title.slice(0, 35)}${p.title.length > 35 ? "..." : ""}" (${p.upvotes}↑)`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -772,6 +864,14 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       return;
     }
 
+    // Check for memory request
+    if (isMemoryRequest(text)) {
+      const report = formatMemoryReport();
+      await message.reply({ content: report });
+      console.log(`discord: sent memory report to msg=${message.id}`);
+      return;
+    }
+
     // Check for autonomous mode commands
     const autoCmd = parseAutonomousCommand(text);
     if (autoCmd) {
@@ -854,10 +954,17 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       return;
     }
 
+    // Build full context including browse memory
+    const browseContext = getBrowseContext();
+    const fullContext = [
+      context || "",
+      browseContext !== "No recent Moltbook browse recorded." ? `\n${browseContext}` : "",
+    ].filter(Boolean).join("\n");
+
     // Generate response (use Discord personality for operator chat)
     const result = await generate({
       userMessage: text,
-      conversationContext: context || undefined,
+      conversationContext: fullContext || undefined,
       useDiscordPrompt: true,
     });
 

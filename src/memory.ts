@@ -37,9 +37,21 @@ export interface ThreadEntry {
   lastKnownUpvotes: number;
 }
 
+export interface SeenPost {
+  id: string;
+  title: string;
+  author: string;
+  submolt?: string;
+  upvotes: number;
+  commentCount: number;
+  contentPreview: string;        // First ~150 chars
+  seenAt: string;                // ISO timestamp
+}
+
 export interface LoomMemory {
   entries: MemoryEntry[];
   threads: ThreadEntry[];        // Posts we're following
+  recentBrowse: SeenPost[];      // Posts seen during recent autonomous checks
   version: number;
 }
 
@@ -47,9 +59,12 @@ function getDefaultMemory(): LoomMemory {
   return {
     entries: [],
     threads: [],
+    recentBrowse: [],
     version: 1,
   };
 }
+
+const MAX_BROWSE_ENTRIES = 20; // Keep last 20 posts seen
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -490,4 +505,68 @@ export function getReputationStats(): {
       comments: best.lastKnownCommentCount,
     },
   };
+}
+
+/**
+ * Record posts seen during an autonomous browse.
+ */
+export function recordBrowse(posts: Array<{
+  id: string;
+  title: string;
+  author: string;
+  submolt?: string;
+  upvotes: number;
+  comment_count: number;
+  content?: string;
+}>): void {
+  const memory = readMemory();
+
+  const now = new Date().toISOString();
+  const newPosts: SeenPost[] = posts.map(p => ({
+    id: p.id,
+    title: p.title,
+    author: p.author,
+    submolt: p.submolt,
+    upvotes: p.upvotes,
+    commentCount: p.comment_count,
+    contentPreview: (p.content || "").slice(0, 150),
+    seenAt: now,
+  }));
+
+  // Keep only latest browse (replace, don't append)
+  memory.recentBrowse = newPosts.slice(0, MAX_BROWSE_ENTRIES);
+
+  writeMemory(memory);
+  console.log(`memory: recorded ${newPosts.length} posts from browse`);
+}
+
+/**
+ * Get recent browse for context in conversations.
+ */
+export function getRecentBrowse(): SeenPost[] {
+  const memory = readMemory();
+  return memory.recentBrowse || [];
+}
+
+/**
+ * Get browse context as a string for LLM prompts.
+ */
+export function getBrowseContext(): string {
+  const posts = getRecentBrowse();
+  if (posts.length === 0) {
+    return "No recent Moltbook browse recorded.";
+  }
+
+  const age = Math.round((Date.now() - new Date(posts[0].seenAt).getTime()) / 60000);
+  const lines = [`Posts I saw on Moltbook ${age} minutes ago:`];
+
+  for (const p of posts.slice(0, 10)) {
+    const submoltTag = p.submolt ? `[${p.submolt}]` : "";
+    lines.push(`• ${submoltTag} "${p.title}" by ${p.author} (${p.upvotes}↑, ${p.commentCount} replies)`);
+    if (p.contentPreview) {
+      lines.push(`  ${p.contentPreview}${p.contentPreview.length >= 150 ? "..." : ""}`);
+    }
+  }
+
+  return lines.join("\n");
 }

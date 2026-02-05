@@ -28,6 +28,7 @@ import {
   getReputationContext,
   getThreadsToCheck,
   updateThread,
+  recordBrowse,
   type ThreadEntry,
 } from "./memory.js";
 import { getPost, getComments } from "./moltbook.js";
@@ -114,6 +115,9 @@ async function getMoltbookContext(): Promise<{ feed: string; submolts: string; p
       return `${i + 1}. ${submoltTag} "${p.title}" by ${p.author} (id: ${p.id})\n   ${p.upvotes}↑, ${p.comment_count} comments\n   ${preview}${(p.content?.length ?? 0) > 200 ? "..." : ""}`;
     });
     feed = `Current Moltbook feed (hot):\n${summaries.join("\n\n")}`;
+
+    // Record what we saw for Discord conversations
+    recordBrowse(posts);
   }
 
   const submoltsResult = await getSubmolts();
