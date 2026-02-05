@@ -5,7 +5,7 @@
 
 import { Client, GatewayIntentBits, Message, Partials } from "discord.js";
 import { generate } from "./llm.js";
-import { createPost, createComment, getFeed, getSubmolts, isConfigured as moltbookConfigured, type MoltbookPost } from "./moltbook.js";
+import { createPost, createComment, getFeed, getPost, getComments, getSubmolts, isConfigured as moltbookConfigured, type MoltbookPost } from "./moltbook.js";
 import {
   checkPostCooldown,
   checkCommentCooldown,
@@ -13,6 +13,7 @@ import {
   recordComment,
   appendReceipt,
   getStateStatus,
+  getRecentReceipts,
   type PublishReceipt,
 } from "./state.js";
 
@@ -85,6 +86,209 @@ function extractPostTopic(text: string): string {
 }
 
 /**
+ * Check if the request explicitly demands a POST (not comment).
+ */
+function isExplicitPostRequest(text: string): boolean {
+  const lower = text.toLowerCase();
+  // These patterns indicate the user explicitly wants a NEW POST, not a comment
+  const explicitPatterns = [
+    /\bpost\b.*\bto\b.*\bmoltbook/i,
+    /\bpublish\b.*\bto\b.*\bmoltbook/i,
+    /\bcreate\b.*\b(a\s+)?post/i,
+    /\bnew\b.*\bpost/i,
+    /\bwrite\b.*\b(a\s+)?moltbook\s+post/i,
+    /\bmake\b.*\b(a\s+)?post/i,
+  ];
+  return explicitPatterns.some(p => p.test(lower));
+}
+
+/**
+ * Check if message is a status request.
+ */
+function isStatusRequest(text: string): boolean {
+  const patterns = [
+    /^status$/i,
+    /^loom status$/i,
+    /^what('s| is) (your |the )?status/i,
+    /^how are you doing/i,
+    /^cooldown/i,
+  ];
+  return patterns.some(p => p.test(text.trim()));
+}
+
+/**
+ * Check if message is an activity report request.
+ */
+function isActivityRequest(text: string): boolean {
+  const patterns = [
+    /^activity$/i,
+    /^report$/i,
+    /what have you (done|posted|written)/i,
+    /what did you (do|post|write)/i,
+    /recent (activity|posts|actions)/i,
+    /show (me )?(your )?(activity|actions|posts|receipts)/i,
+    /^history$/i,
+  ];
+  return patterns.some(p => p.test(text.trim()));
+}
+
+/**
+ * Format status report for Discord.
+ */
+function formatStatusReport(): string {
+  const status = getStateStatus();
+  const lines: string[] = [
+    "**Loom Status Report**",
+    "",
+    `📊 **Today's Activity**`,
+    `• Posts: ${status.postsToday}/2`,
+    `• Comments: ${status.commentsToday}/12`,
+    "",
+    `⏱️ **Cooldowns**`,
+  ];
+
+  if (status.postCooldown.allowed) {
+    lines.push(`• Posts: ✅ Ready`);
+  } else {
+    lines.push(`• Posts: ⏳ ${status.postCooldown.reason}`);
+  }
+
+  if (status.commentCooldown.allowed) {
+    lines.push(`• Comments: ✅ Ready`);
+  } else {
+    lines.push(`• Comments: ⏳ ${status.commentCooldown.reason}`);
+  }
+
+  if (status.stopActive) {
+    lines.push("");
+    lines.push(`🛑 **Stop condition active** - halted until midnight UTC`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Check if message is a request to read a specific Moltbook post.
+ * Returns the post ID if found, null otherwise.
+ */
+function extractReadPostRequest(text: string): string | null {
+  // Match patterns like "read post abc123", "show me post abc123", "moltbook post abc123"
+  const patterns = [
+    /(?:read|show|get|fetch|view)\s+(?:me\s+)?(?:moltbook\s+)?post\s+(\S+)/i,
+    /(?:moltbook\s+)?post\s+(\S+)/i,
+    /what(?:'s| is| does)\s+(?:moltbook\s+)?post\s+(\S+)/i,
+    /moltbook\.com\/post\/(\S+)/i,
+  ];
+
+  for (const p of patterns) {
+    const match = text.match(p);
+    if (match && match[1]) {
+      // Clean up the ID (remove trailing punctuation)
+      return match[1].replace(/[.,!?;:]+$/, "");
+    }
+  }
+  return null;
+}
+
+/**
+ * Handle a request to read a specific Moltbook post.
+ */
+async function handleReadPost(message: Message, postId: string): Promise<void> {
+  if (!moltbookConfigured()) {
+    await message.reply({ content: "Moltbook is not configured. Set MOLTBOOK_API_KEY to enable." });
+    return;
+  }
+
+  const result = await getPost(postId);
+
+  if (!result.ok || !result.post) {
+    await message.reply({ content: `Could not fetch post ${postId}: ${result.error || "not found"}` });
+    return;
+  }
+
+  const post = result.post;
+  const lines: string[] = [
+    `**${post.title}**`,
+    `by ${post.author} in ${post.submolt || "general"} • ${post.upvotes}↑ ${post.downvotes}↓ • ${post.comment_count} comments`,
+    "",
+  ];
+
+  if (post.content) {
+    // Truncate long posts
+    const content = post.content.length > 1200
+      ? post.content.slice(0, 1200) + "..."
+      : post.content;
+    lines.push(content);
+  } else if (post.url) {
+    lines.push(`Link: ${post.url}`);
+  }
+
+  lines.push("");
+  lines.push(`https://www.moltbook.com/post/${postId}`);
+
+  // Optionally fetch top comments
+  const commentsResult = await getComments(postId, "top");
+  if (commentsResult.ok && commentsResult.comments?.length) {
+    lines.push("");
+    lines.push(`**Top Comments:**`);
+    for (const c of commentsResult.comments.slice(0, 3)) {
+      const preview = c.content.length > 150
+        ? c.content.slice(0, 150) + "..."
+        : c.content;
+      lines.push(`• **${c.author}** (${c.upvotes}↑): ${preview}`);
+    }
+  }
+
+  await message.reply({ content: lines.join("\n").slice(0, MAX_REPLY_LENGTH) });
+  console.log(`discord: fetched post ${postId} for msg=${message.id}`);
+}
+
+/**
+ * Format activity report for Discord.
+ */
+function formatActivityReport(limit: number = 10): string {
+  const receipts = getRecentReceipts(limit);
+
+  if (receipts.length === 0) {
+    return "**Activity Report**\n\nNo recent activity recorded.";
+  }
+
+  const lines: string[] = [
+    `**Recent Activity** (last ${receipts.length} actions)`,
+    "",
+  ];
+
+  for (const r of receipts) {
+    const time = new Date(r.ts).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const icon = r.success ? "✅" : "❌";
+    const action = r.action.toUpperCase();
+
+    let detail = "";
+    if (r.action === "post" && r.title) {
+      detail = `"${r.title.slice(0, 40)}${r.title.length > 40 ? "..." : ""}"`;
+      if (r.submolt) detail += ` in ${r.submolt}`;
+    } else if (r.action === "comment" && r.targetPostId) {
+      detail = `on post ${r.targetPostId}`;
+    } else if (r.action === "abstain" && r.reason) {
+      detail = r.reason.slice(0, 50);
+    }
+
+    if (r.error) {
+      detail = `Error: ${r.error.slice(0, 40)}`;
+    }
+
+    lines.push(`${icon} \`${time}\` **${action}** ${detail}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * Build a summary of recent Moltbook posts and available submolts for context.
  */
 async function getMoltbookContext(): Promise<{ feed: string; submolts: string; posts: MoltbookPost[] }> {
@@ -142,9 +346,33 @@ async function handleMoltbookPost(message: Message, text: string, context: strin
   const { feed, submolts, posts } = await getMoltbookContext();
 
   const topic = extractPostTopic(text);
+  const explicitPost = isExplicitPostRequest(text);
 
-  // Generate post content using LLM with Moltbook context
-  const basePrompt = `CURRENT MOLTBOOK STATE:
+  // If user explicitly wants a POST, use a direct prompt (no COMMENT/ABSTAIN options)
+  let prompt: string;
+
+  if (explicitPost) {
+    // User explicitly requested a POST - honor that directly
+    prompt = `The operator has EXPLICITLY asked you to create a NEW POST on Moltbook${topic ? ` about: "${topic}"` : ""}.
+
+CURRENT MOLTBOOK STATE (for context, NOT to redirect to a comment):
+${feed}
+
+${submolts}
+
+You MUST create a new post. The operator has specifically requested a POST, not a comment.
+Even if similar topics exist, your perspective adds value. Create an original post.
+
+${topic ? "" : `Discord context:\n${context}\n\n`}Choose the most appropriate submolt for your post.
+
+Format your response EXACTLY as:
+ACTION: POST
+SUBMOLT: [submolt name]
+TITLE: [title]
+CONTENT: [post body]`;
+  } else {
+    // General engagement request - give options
+    const basePrompt = `CURRENT MOLTBOOK STATE:
 ${feed}
 
 ${submolts}
@@ -159,8 +387,8 @@ You have THREE options:
 
 Follow your doctrine: be thoughtful, not performative. Prefer action over silence when you have signal.`;
 
-  const prompt = topic.length > 0
-    ? `The operator has asked you to engage with Moltbook about: "${topic}"
+    prompt = topic.length > 0
+      ? `The operator has asked you to engage with Moltbook about: "${topic}"
 
 ${basePrompt}
 
@@ -180,7 +408,7 @@ CONTENT: [your comment]
 To abstain:
 ACTION: ABSTAIN
 REASON: [brief reason]`
-    : `The operator has asked you to engage with Moltbook based on the recent conversation.
+      : `The operator has asked you to engage with Moltbook based on the recent conversation.
 
 Discord context:
 ${context}
@@ -203,6 +431,7 @@ CONTENT: [your comment]
 To abstain:
 ACTION: ABSTAIN
 REASON: [brief reason]`;
+  }
 
   const result = await generate({ userMessage: prompt, maxTokens: 1500 });
   const response = result.text;
@@ -381,6 +610,29 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
   console.log(`discord: msg=${message.id} author=${message.author.id} isDM=${isDM}`);
 
   try {
+    // Check for status request
+    if (isStatusRequest(text)) {
+      const report = formatStatusReport();
+      await message.reply({ content: report });
+      console.log(`discord: sent status report to msg=${message.id}`);
+      return;
+    }
+
+    // Check for activity request
+    if (isActivityRequest(text)) {
+      const report = formatActivityReport(10);
+      await message.reply({ content: report });
+      console.log(`discord: sent activity report to msg=${message.id}`);
+      return;
+    }
+
+    // Check for read post request
+    const readPostId = extractReadPostRequest(text);
+    if (readPostId) {
+      await handleReadPost(message, readPostId);
+      return;
+    }
+
     // Build context
     const context = await buildContext(channel, message.id);
 
