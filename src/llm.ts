@@ -5,7 +5,7 @@
 
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import { getSystemPrompt } from "./doctrine.js";
+import { getSystemPrompt, getDiscordSystemPrompt } from "./doctrine.js";
 
 export type LLMProvider = "openai" | "anthropic";
 
@@ -34,6 +34,7 @@ export interface GenerateOptions {
   userMessage: string;
   conversationContext?: string; // Recent messages for context
   maxTokens?: number;
+  useDiscordPrompt?: boolean; // Use DISCORD.md personality for operator chat
 }
 
 export interface GenerateResult {
@@ -50,7 +51,7 @@ export interface GenerateResult {
 export async function generate(options: GenerateOptions): Promise<GenerateResult> {
   const provider = getProvider();
   const model = getModel(provider);
-  const systemPrompt = getSystemPrompt();
+  const systemPrompt = options.useDiscordPrompt ? getDiscordSystemPrompt() : getSystemPrompt();
   const maxTokens = options.maxTokens ?? 1024;
 
   // Build user message with optional context

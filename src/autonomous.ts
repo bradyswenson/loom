@@ -15,34 +15,80 @@ import {
 import {
   checkPostCooldown,
   checkCommentCooldown,
-  recordPost,
-  recordComment,
+  recordPost as recordPostState,
+  recordComment as recordCommentState,
   appendReceipt,
   getStateStatus,
   type PublishReceipt,
 } from "./state.js";
+import {
+  recordPost as recordPostMemory,
+  recordComment as recordCommentMemory,
+  getMemoryContext,
+  getReputationContext,
+  getThreadsToCheck,
+  updateThread,
+  type ThreadEntry,
+} from "./memory.js";
+import { getPost, getComments } from "./moltbook.js";
+import {
+  alertNewReplies,
+  alertTraction,
+  alertAutonomousAction,
+} from "./alerts.js";
 
 // Configuration from env
-const DEFAULT_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes minimum
+const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const MIN_INTERVAL_MS = 1 * 60 * 1000; // 1 minute minimum
 
 let autonomousEnabled = false;
 let intervalHandle: NodeJS.Timeout | null = null;
+let currentIntervalMs = DEFAULT_INTERVAL_MS;
 let lastCheckAt: Date | null = null;
 let consecutiveAbstains = 0;
 
 /**
- * Get the check interval from env or default.
+ * Get the check interval from env or use current setting.
  */
 function getIntervalMs(): number {
+  return currentIntervalMs;
+}
+
+/**
+ * Initialize interval from env var.
+ */
+function initIntervalFromEnv(): void {
   const envInterval = process.env.AUTONOMOUS_INTERVAL_MINUTES;
   if (envInterval) {
     const mins = parseInt(envInterval, 10);
     if (!isNaN(mins) && mins > 0) {
-      return Math.max(mins * 60 * 1000, MIN_INTERVAL_MS);
+      currentIntervalMs = Math.max(mins * 60 * 1000, MIN_INTERVAL_MS);
     }
   }
-  return DEFAULT_INTERVAL_MS;
+}
+
+/**
+ * Set the autonomous check interval (in minutes).
+ * Restarts the loop if already running.
+ */
+export function setIntervalMinutes(minutes: number): boolean {
+  if (minutes < 1) return false;
+  const newInterval = Math.max(minutes * 60 * 1000, MIN_INTERVAL_MS);
+  currentIntervalMs = newInterval;
+  console.log(`autonomous: interval set to ${minutes} minutes`);
+
+  // Restart loop if running
+  if (autonomousEnabled && intervalHandle) {
+    clearInterval(intervalHandle);
+    intervalHandle = setInterval(() => {
+      if (autonomousEnabled) {
+        runAutonomousCheck();
+      }
+    }, currentIntervalMs);
+    console.log(`autonomous: restarted with new interval`);
+  }
+
+  return true;
 }
 
 /**
@@ -130,6 +176,87 @@ function parseDecision(response: string): AutonomousDecision {
   return decision;
 }
 
+// Track threads with new activity for potential follow-up
+let threadsWithActivity: Array<{
+  thread: ThreadEntry;
+  newComments: number;
+  upvoteChange: number;
+}> = [];
+
+/**
+ * Check tracked threads for new activity.
+ */
+async function checkTrackedThreads(): Promise<void> {
+  const threads = getThreadsToCheck(48); // Check threads from last 48 hours
+  if (threads.length === 0) return;
+
+  console.log(`autonomous: Checking ${threads.length} tracked threads for activity`);
+  threadsWithActivity = [];
+
+  for (const thread of threads) {
+    try {
+      const result = await getPost(thread.postId);
+      if (!result.ok || !result.post) continue;
+
+      const post = result.post;
+      const changes = updateThread(
+        thread.postId,
+        post.comment_count || 0,
+        post.upvotes || 0
+      );
+
+      if (changes && (changes.newComments > 0 || changes.upvoteChange !== 0)) {
+        threadsWithActivity.push({
+          thread,
+          newComments: changes.newComments,
+          upvoteChange: changes.upvoteChange,
+        });
+        console.log(`autonomous: Thread "${thread.postTitle}" has ${changes.newComments} new comments, ${changes.upvoteChange > 0 ? "+" : ""}${changes.upvoteChange} upvotes`);
+
+        // Send alerts for new replies
+        if (changes.newComments > 0) {
+          alertNewReplies(
+            thread.postId,
+            thread.postTitle,
+            changes.newComments,
+            post.comment_count || 0
+          ).catch(err => console.error("autonomous: Failed to send reply alert:", err));
+        }
+
+        // Send alerts for traction
+        if (changes.upvoteChange > 0) {
+          alertTraction(
+            thread.postId,
+            thread.postTitle,
+            post.upvotes || 0,
+            (post.upvotes || 0) - changes.upvoteChange
+          ).catch(err => console.error("autonomous: Failed to send traction alert:", err));
+        }
+      }
+    } catch (err) {
+      console.error(`autonomous: Error checking thread ${thread.postId}:`, err);
+    }
+  }
+}
+
+/**
+ * Get context about threads with new activity for LLM.
+ */
+function getThreadActivityContext(): string {
+  if (threadsWithActivity.length === 0) return "";
+
+  const lines = ["THREADS WITH NEW ACTIVITY:"];
+  for (const { thread, newComments, upvoteChange } of threadsWithActivity) {
+    const parts: string[] = [`"${thread.postTitle}" (id: ${thread.postId})`];
+    if (newComments > 0) parts.push(`${newComments} new comments`);
+    if (upvoteChange !== 0) parts.push(`${upvoteChange > 0 ? "+" : ""}${upvoteChange} votes`);
+    lines.push(`- ${parts.join(", ")}`);
+  }
+  lines.push("");
+  lines.push("Consider following up on threads where you previously engaged, especially if there are replies to your comments.");
+  return lines.join("\n");
+}
+
 /**
  * Execute one autonomous check cycle.
  */
@@ -159,8 +286,16 @@ async function runAutonomousCheck(): Promise<void> {
   console.log("autonomous: Starting check cycle...");
   lastCheckAt = new Date();
 
+  // Check tracked threads for new activity
+  await checkTrackedThreads();
+
   // Fetch Moltbook state
   const { feed, submolts, posts } = await getMoltbookContext();
+
+  // Get memory context, thread activity, and reputation
+  const memoryContext = getMemoryContext();
+  const threadActivity = getThreadActivityContext();
+  const reputationContext = getReputationContext();
 
   // Build the autonomous prompt
   const availableActions: string[] = [];
@@ -174,6 +309,9 @@ ${feed}
 
 ${submolts}
 
+YOUR MEMORY:
+${memoryContext}
+${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}
 AVAILABLE ACTIONS:
 ${availableActions.map((a, i) => `${i + 1}. ${a}`).join("\n")}
 
@@ -184,6 +322,8 @@ DECISION CRITERIA:
 - Look for posts that genuinely interest you or where you can add value
 - Consider starting new conversations on topics you care about
 - Don't just react — bring your own perspective
+- Avoid repeating topics you've recently covered (check YOUR MEMORY above)
+- If you've engaged with a thread before, consider continuing that conversation
 - If nothing catches your attention, OBSERVE is fine, but don't be too passive
 - Quality over quantity, but don't overthink — agents learn by participating
 
@@ -271,10 +411,21 @@ async function executePost(decision: AutonomousDecision, posts: MoltbookPost[]):
 
   appendReceipt(receipt);
 
-  if (result.ok) {
-    recordPost();
+  if (result.ok && result.post?.id) {
+    recordPostState();
+    recordPostMemory(
+      result.post.id,
+      decision.title,
+      decision.content,
+      submolt,
+      true // autonomous
+    );
     consecutiveAbstains = 0;
-    console.log(`autonomous: Posted successfully! ID: ${result.post?.id}`);
+    console.log(`autonomous: Posted successfully! ID: ${result.post.id}`);
+
+    // Alert operator about autonomous post
+    alertAutonomousAction("post", decision.title, result.post.id, submolt)
+      .catch(err => console.error("autonomous: Failed to send action alert:", err));
   } else {
     console.error(`autonomous: Failed to post: ${result.error}`);
   }
@@ -315,9 +466,23 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
   appendReceipt(receipt);
 
   if (result.ok) {
-    recordComment();
+    recordCommentState();
+    // Record to memory (use comment ID if available, otherwise generate one)
+    const commentId = result.comment?.id || `comment-${Date.now()}`;
+    recordCommentMemory(
+      commentId,
+      decision.content,
+      decision.postId,
+      targetPost.title,
+      targetPost.submolt,
+      true // autonomous
+    );
     consecutiveAbstains = 0;
     console.log(`autonomous: Comment posted successfully!`);
+
+    // Alert operator about autonomous comment
+    alertAutonomousAction("comment", targetPost.title, decision.postId, targetPost.submolt)
+      .catch(err => console.error("autonomous: Failed to send action alert:", err));
   } else {
     console.error(`autonomous: Failed to comment: ${result.error}`);
   }
@@ -411,6 +576,9 @@ export async function triggerCheck(): Promise<void> {
  * Initialize autonomous mode based on env settings.
  */
 export function initAutonomous(): void {
+  // Initialize interval from env var
+  initIntervalFromEnv();
+
   if (isEnabledByEnv()) {
     console.log("autonomous: Enabled via AUTONOMOUS_MODE env var");
     startAutonomous();

@@ -102,10 +102,11 @@ Behavioral synthesis:
 
 // Pre-compile on module load for performance
 let cachedPrompt: string | null = null;
+let cachedDiscordPrompt: string | null = null;
 let cachedBundle: DoctrineBundle | null = null;
 
 /**
- * Get the compiled system prompt (cached after first call).
+ * Get the compiled system prompt for Moltbook (cached after first call).
  */
 export function getSystemPrompt(): string {
   if (cachedPrompt === null) {
@@ -114,6 +115,26 @@ export function getSystemPrompt(): string {
     console.log(`doctrine loaded: ${cachedBundle.files.length} files, ${cachedBundle.totalChars} chars`);
   }
   return cachedPrompt;
+}
+
+/**
+ * Get the compiled system prompt for Discord conversations (includes DISCORD.md).
+ */
+export function getDiscordSystemPrompt(): string {
+  if (cachedDiscordPrompt === null) {
+    // Start with base Moltbook prompt
+    const basePrompt = getSystemPrompt();
+
+    // Load Discord-specific personality
+    const discordFile = readDoctrineFile("DISCORD.md");
+    if (discordFile) {
+      cachedDiscordPrompt = basePrompt + `\n\n--- DISCORD CONVERSATION STYLE ---\n\n${discordFile.content}\n--- END DISCORD ---`;
+      console.log(`discord doctrine loaded: ${discordFile.content.length} chars`);
+    } else {
+      cachedDiscordPrompt = basePrompt;
+    }
+  }
+  return cachedDiscordPrompt;
 }
 
 /**

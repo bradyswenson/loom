@@ -9,8 +9,8 @@ import { createPost, createComment, getFeed, getPost, getComments, getSubmolts, 
 import {
   checkPostCooldown,
   checkCommentCooldown,
-  recordPost,
-  recordComment,
+  recordPost as recordPostState,
+  recordComment as recordCommentState,
   appendReceipt,
   getStateStatus,
   getRecentReceipts,
@@ -22,7 +22,20 @@ import {
   isAutonomousRunning,
   getAutonomousStatus,
   triggerCheck,
+  setIntervalMinutes,
 } from "./autonomous.js";
+import {
+  recordPost as recordPostMemory,
+  recordComment as recordCommentMemory,
+  getMemoryStats,
+  getReputationStats,
+} from "./memory.js";
+import {
+  initAlerts,
+  setAlertsEnabled,
+  isAlertsEnabled,
+  getAlertStatus,
+} from "./alerts.js";
 
 const MAX_REPLY_LENGTH = 1900; // Discord limit is 2000, leave room for safety
 const RECENT_MESSAGE_WINDOW = 6;
@@ -141,34 +154,51 @@ function isActivityRequest(text: string): boolean {
 
 /**
  * Check if message is an autonomous mode command.
- * Returns the command type or null.
+ * Returns the command type and optional parameter.
  */
-function parseAutonomousCommand(text: string): "start" | "stop" | "check" | "status" | null {
+function parseAutonomousCommand(text: string): { cmd: "start" | "stop" | "check" | "status" | "interval" | "alerts_on" | "alerts_off"; param?: number } | null {
   const lower = text.toLowerCase().trim();
 
   // Start commands
   if (/^(start|enable|begin)\s+(autonomous|auto|autonomy)/.test(lower) ||
       /^autonomous\s+(on|start|enable)/.test(lower) ||
       /^go\s+autonomous/.test(lower)) {
-    return "start";
+    return { cmd: "start" };
   }
 
   // Stop commands
   if (/^(stop|disable|pause|halt)\s+(autonomous|auto|autonomy)/.test(lower) ||
       /^autonomous\s+(off|stop|disable|pause)/.test(lower)) {
-    return "stop";
+    return { cmd: "stop" };
   }
 
   // Manual check/trigger
   if (/^(check|browse|look)\s+(moltbook|around|now)/.test(lower) ||
       /^moltbook\s+check/.test(lower) ||
       /^trigger\s+(check|autonomous)/.test(lower)) {
-    return "check";
+    return { cmd: "check" };
   }
 
   // Status (handled by formatStatusReport but for explicit autonomous status)
   if (/^autonomous\s+status/.test(lower)) {
-    return "status";
+    return { cmd: "status" };
+  }
+
+  // Set interval: "set interval 5" or "autonomous interval 10" or "check every 5 minutes"
+  const intervalMatch = lower.match(/(?:set\s+)?(?:autonomous\s+)?interval\s+(\d+)|check\s+every\s+(\d+)/);
+  if (intervalMatch) {
+    const minutes = parseInt(intervalMatch[1] || intervalMatch[2], 10);
+    if (!isNaN(minutes) && minutes > 0) {
+      return { cmd: "interval", param: minutes };
+    }
+  }
+
+  // Alert commands
+  if (/^alerts?\s+(on|enable)/.test(lower) || /^enable\s+alerts?/.test(lower)) {
+    return { cmd: "alerts_on" };
+  }
+  if (/^alerts?\s+(off|disable)/.test(lower) || /^disable\s+alerts?/.test(lower)) {
+    return { cmd: "alerts_off" };
   }
 
   return null;
@@ -220,6 +250,42 @@ function formatStatusReport(): string {
     lines.push(`• Consecutive observes: ${autoStatus.consecutiveObserves}`);
   } else {
     lines.push(`• Status: ⏸️ Disabled`);
+  }
+
+  // Add memory stats
+  const memStats = getMemoryStats();
+  if (memStats.totalEntries > 0) {
+    lines.push("");
+    lines.push(`🧠 **Memory**`);
+    lines.push(`• Total: ${memStats.posts} posts, ${memStats.comments} comments`);
+    lines.push(`• Tracking: ${memStats.trackedThreads} threads`);
+    if (memStats.topTopics.length > 0) {
+      lines.push(`• Top topics: ${memStats.topTopics.join(", ")}`);
+    }
+  }
+
+  // Add reputation stats
+  const repStats = getReputationStats();
+  if (repStats) {
+    lines.push("");
+    lines.push(`📈 **Reputation**`);
+    lines.push(`• Total: ${repStats.totalUpvotes}↑, ${repStats.totalComments} replies`);
+    lines.push(`• Avg: ${repStats.avgUpvotes.toFixed(1)}↑, ${repStats.avgComments.toFixed(1)} replies/post`);
+    if (repStats.bestPost) {
+      lines.push(`• Best: "${repStats.bestPost.title.slice(0, 30)}${repStats.bestPost.title.length > 30 ? "..." : ""}" (${repStats.bestPost.upvotes}↑)`);
+    }
+  }
+
+  // Add alert status
+  const alertStatus = getAlertStatus();
+  lines.push("");
+  lines.push(`🔔 **Alerts**`);
+  if (!alertStatus.operatorSet) {
+    lines.push(`• Status: ⚠️ No OPERATOR_DISCORD_ID set`);
+  } else if (alertStatus.enabled) {
+    lines.push(`• Status: ✅ Enabled`);
+  } else {
+    lines.push(`• Status: 🔕 Disabled`);
   }
 
   return lines.join("\n");
@@ -555,9 +621,20 @@ REASON: [brief reason]`;
     }
 
     // Record successful comment
-    recordComment();
+    recordCommentState();
     const targetPost = posts.find(p => p.id === targetPostId);
     const postUrl = `https://www.moltbook.com/post/${targetPostId}`;
+
+    // Record to memory
+    const commentId = commentResult.comment?.id || `comment-${Date.now()}`;
+    recordCommentMemory(
+      commentId,
+      commentContent,
+      targetPostId,
+      targetPost?.title || "Unknown",
+      targetPost?.submolt,
+      false // not autonomous
+    );
 
     // Log success receipt
     appendReceipt({
@@ -618,9 +695,20 @@ REASON: [brief reason]`;
   }
 
   // Record successful post
-  recordPost();
+  recordPostState();
   const postId = postResult.post?.id;
   const postUrl = postId ? `https://www.moltbook.com/post/${postId}` : null;
+
+  // Record to memory
+  if (postId) {
+    recordPostMemory(
+      postId,
+      title,
+      content,
+      submolt,
+      false // not autonomous
+    );
+  }
 
   // Log success receipt
   appendReceipt({
@@ -687,7 +775,7 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
     // Check for autonomous mode commands
     const autoCmd = parseAutonomousCommand(text);
     if (autoCmd) {
-      switch (autoCmd) {
+      switch (autoCmd.cmd) {
         case "start":
           if (isAutonomousRunning()) {
             await message.reply({ content: "Autonomous mode is already running." });
@@ -718,6 +806,30 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
           triggerCheck().catch(err => console.error("discord: manual check failed", err));
           return;
 
+        case "interval":
+          if (autoCmd.param && autoCmd.param >= 1) {
+            setIntervalMinutes(autoCmd.param);
+            await message.reply({
+              content: `⏱️ Autonomous check interval set to ${autoCmd.param} minute${autoCmd.param > 1 ? "s" : ""}.`
+            });
+          } else {
+            await message.reply({ content: "Invalid interval. Please specify a number >= 1 minute." });
+          }
+          console.log(`discord: interval set to ${autoCmd.param}m from msg=${message.id}`);
+          return;
+
+        case "alerts_on":
+          setAlertsEnabled(true);
+          await message.reply({ content: "🔔 Operator alerts enabled. I'll DM you about new replies and traction." });
+          console.log(`discord: alerts enabled from msg=${message.id}`);
+          return;
+
+        case "alerts_off":
+          setAlertsEnabled(false);
+          await message.reply({ content: "🔕 Operator alerts disabled." });
+          console.log(`discord: alerts disabled from msg=${message.id}`);
+          return;
+
         case "status":
           const report = formatStatusReport();
           await message.reply({ content: report });
@@ -742,10 +854,11 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       return;
     }
 
-    // Generate response
+    // Generate response (use Discord personality for operator chat)
     const result = await generate({
       userMessage: text,
       conversationContext: context || undefined,
+      useDiscordPrompt: true,
     });
 
     // Truncate if needed
@@ -795,6 +908,9 @@ export async function startDiscord(): Promise<Client | null> {
     const tag = client.user?.tag ?? "unknown";
     const guilds = client.guilds?.cache?.size ?? 0;
     console.log(`discord: ready as ${tag}, guilds=${guilds}`);
+
+    // Initialize operator alerts
+    initAlerts(client);
   });
 
   await client.login(token);
