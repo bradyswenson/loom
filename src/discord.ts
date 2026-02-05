@@ -363,18 +363,19 @@ function formatStatusReport(): string {
   if (status.postCooldown.allowed) {
     lines.push(`• Posts: Ready`);
   } else {
-    lines.push(`• Posts: ⏳ ${status.postCooldown.reason}`);
+    lines.push(`• Posts: ${status.postCooldown.reason}`);
   }
 
   if (status.commentCooldown.allowed) {
     lines.push(`• Comments: Ready`);
   } else {
-    lines.push(`• Comments: ⏳ ${status.commentCooldown.reason}`);
+    lines.push(`• Comments: ${status.commentCooldown.reason}`);
   }
 
   if (status.stopActive) {
     lines.push("");
-    lines.push(`🛑 **Stop condition active** - halted until midnight UTC`);
+    lines.push(`⛔ **Stop Condition**`);
+    lines.push(`• Halted until midnight UTC`);
   }
 
   // Add autonomous status
@@ -390,7 +391,7 @@ function formatStatusReport(): string {
     }
     lines.push(`• Consecutive observes: ${autoStatus.consecutiveObserves}`);
   } else {
-    lines.push(`• Status: ⏸️ Disabled`);
+    lines.push(`• Status: Disabled`);
   }
 
   // Add memory stats (always show)
@@ -432,11 +433,11 @@ function formatStatusReport(): string {
   lines.push("");
   lines.push(`🔔 **Alerts**`);
   if (!alertStatus.operatorSet) {
-    lines.push(`• Status: ⚠️ No OPERATOR_DISCORD_ID set`);
+    lines.push(`• Status: No OPERATOR_DISCORD_ID set`);
   } else if (alertStatus.enabled) {
     lines.push(`• Status: Enabled`);
   } else {
-    lines.push(`• Status: 🔕 Disabled`);
+    lines.push(`• Status: Disabled`);
   }
 
   return lines.join("\n");

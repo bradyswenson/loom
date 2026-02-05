@@ -52,7 +52,7 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
   const provider = getProvider();
   const model = getModel(provider);
   const systemPrompt = options.useDiscordPrompt ? getDiscordSystemPrompt() : getSystemPrompt();
-  const maxTokens = options.maxTokens ?? 1024;
+  const maxTokens = options.maxTokens ?? 4096;
 
   // Build user message with optional context
   let userContent = options.userMessage;
@@ -94,20 +94,44 @@ async function generateOpenAI(
     ],
   });
 
-  const choice = response.choices[0];
-  const text = choice?.message?.content ?? "";
+  let choice = response.choices[0];
+  let text = choice?.message?.content ?? "";
+  let inputTokens = response.usage?.prompt_tokens;
+  let outputTokens = response.usage?.completion_tokens;
 
   // Log if we got an empty or filtered response
   if (!text || choice?.finish_reason !== "stop") {
     console.log(`llm: OpenAI finish_reason=${choice?.finish_reason} contentLength=${text?.length ?? 0}`);
   }
 
+  // Retry with simplified prompt if we hit token limit with empty output
+  // This happens when reasoning models use all tokens on internal thinking
+  if (choice?.finish_reason === "length" && !text.trim()) {
+    console.log(`llm: Retrying with simplified prompt due to empty length-limited response`);
+
+    const retryResponse = await client.chat.completions.create({
+      model,
+      max_completion_tokens: maxTokens,
+      messages: [
+        { role: "system", content: "You are a helpful assistant. Keep your response concise and direct." },
+        { role: "user", content: `Please respond briefly to: ${userContent.slice(-500)}` },
+      ],
+    });
+
+    choice = retryResponse.choices[0];
+    text = choice?.message?.content ?? "";
+    inputTokens = retryResponse.usage?.prompt_tokens;
+    outputTokens = retryResponse.usage?.completion_tokens;
+
+    console.log(`llm: Retry finish_reason=${choice?.finish_reason} contentLength=${text?.length ?? 0}`);
+  }
+
   return {
     text: text.trim(),
     provider: "openai",
     model,
-    inputTokens: response.usage?.prompt_tokens,
-    outputTokens: response.usage?.completion_tokens,
+    inputTokens,
+    outputTokens,
   };
 }
 
