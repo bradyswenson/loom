@@ -10,6 +10,7 @@ import { startDiscord } from "./discord.js";
 import { getDoctrineMetadata } from "./doctrine.js";
 import { getLLMConfig } from "./llm.js";
 import { checkConnection as checkMoltbook, isConfigured as moltbookConfigured } from "./moltbook.js";
+import { initAutonomous, stopAutonomous, getAutonomousStatus } from "./autonomous.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -26,6 +27,7 @@ function startHealthServer(): http.Server {
       const doctrine = getDoctrineMetadata();
       const llm = getLLMConfig();
 
+      const autoStatus = getAutonomousStatus();
       const health = {
         ok: true,
         name: "loom-v3",
@@ -37,6 +39,11 @@ function startHealthServer(): http.Server {
           compiledAt: doctrine.compiledAt,
         } : null,
         moltbook: moltbookStatus,
+        autonomous: {
+          running: autoStatus.running,
+          intervalMinutes: autoStatus.intervalMinutes,
+          lastCheck: autoStatus.lastCheck,
+        },
       };
 
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -84,6 +91,8 @@ async function main(): Promise<void> {
     moltbookStatus = await checkMoltbook();
     if (moltbookStatus.ok) {
       console.log(`moltbook: connected as ${moltbookStatus.agent}`);
+      // Initialize autonomous mode (will check AUTONOMOUS_MODE env var)
+      initAutonomous();
     } else {
       console.error(`moltbook: connection failed - ${moltbookStatus.error}`);
     }
@@ -95,6 +104,7 @@ async function main(): Promise<void> {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`loom-v3: received ${signal}, shutting down...`);
+    stopAutonomous();
     if (discordClient) {
       discordClient.destroy();
     }

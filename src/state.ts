@@ -38,7 +38,7 @@ export interface LoomState {
 export interface PublishReceipt {
   ts: string;
   action: "post" | "comment" | "abstain";
-  surface: "moltbook";
+  surface?: "moltbook";
   postId?: string;
   commentId?: string;
   targetPostId?: string;
@@ -48,6 +48,7 @@ export interface PublishReceipt {
   reason?: string; // For abstain
   success: boolean;
   error?: string;
+  autonomous?: boolean; // True if action was taken autonomously
 }
 
 // --- State management ---

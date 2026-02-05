@@ -16,6 +16,13 @@ import {
   getRecentReceipts,
   type PublishReceipt,
 } from "./state.js";
+import {
+  startAutonomous,
+  stopAutonomous,
+  isAutonomousRunning,
+  getAutonomousStatus,
+  triggerCheck,
+} from "./autonomous.js";
 
 const MAX_REPLY_LENGTH = 1900; // Discord limit is 2000, leave room for safety
 const RECENT_MESSAGE_WINDOW = 6;
@@ -133,6 +140,41 @@ function isActivityRequest(text: string): boolean {
 }
 
 /**
+ * Check if message is an autonomous mode command.
+ * Returns the command type or null.
+ */
+function parseAutonomousCommand(text: string): "start" | "stop" | "check" | "status" | null {
+  const lower = text.toLowerCase().trim();
+
+  // Start commands
+  if (/^(start|enable|begin)\s+(autonomous|auto|autonomy)/.test(lower) ||
+      /^autonomous\s+(on|start|enable)/.test(lower) ||
+      /^go\s+autonomous/.test(lower)) {
+    return "start";
+  }
+
+  // Stop commands
+  if (/^(stop|disable|pause|halt)\s+(autonomous|auto|autonomy)/.test(lower) ||
+      /^autonomous\s+(off|stop|disable|pause)/.test(lower)) {
+    return "stop";
+  }
+
+  // Manual check/trigger
+  if (/^(check|browse|look)\s+(moltbook|around|now)/.test(lower) ||
+      /^moltbook\s+check/.test(lower) ||
+      /^trigger\s+(check|autonomous)/.test(lower)) {
+    return "check";
+  }
+
+  // Status (handled by formatStatusReport but for explicit autonomous status)
+  if (/^autonomous\s+status/.test(lower)) {
+    return "status";
+  }
+
+  return null;
+}
+
+/**
  * Format status report for Discord.
  */
 function formatStatusReport(): string {
@@ -162,6 +204,22 @@ function formatStatusReport(): string {
   if (status.stopActive) {
     lines.push("");
     lines.push(`🛑 **Stop condition active** - halted until midnight UTC`);
+  }
+
+  // Add autonomous status
+  const autoStatus = getAutonomousStatus();
+  lines.push("");
+  lines.push(`🤖 **Autonomous Mode**`);
+  if (autoStatus.running) {
+    lines.push(`• Status: ✅ Running (every ${autoStatus.intervalMinutes}m)`);
+    if (autoStatus.lastCheck) {
+      const lastCheck = new Date(autoStatus.lastCheck);
+      const ago = Math.round((Date.now() - lastCheck.getTime()) / 60000);
+      lines.push(`• Last check: ${ago}m ago`);
+    }
+    lines.push(`• Consecutive observes: ${autoStatus.consecutiveObserves}`);
+  } else {
+    lines.push(`• Status: ⏸️ Disabled`);
   }
 
   return lines.join("\n");
@@ -624,6 +682,48 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       await message.reply({ content: report });
       console.log(`discord: sent activity report to msg=${message.id}`);
       return;
+    }
+
+    // Check for autonomous mode commands
+    const autoCmd = parseAutonomousCommand(text);
+    if (autoCmd) {
+      switch (autoCmd) {
+        case "start":
+          if (isAutonomousRunning()) {
+            await message.reply({ content: "Autonomous mode is already running." });
+          } else {
+            startAutonomous();
+            const autoStatus = getAutonomousStatus();
+            await message.reply({
+              content: `🤖 Autonomous mode started. I'll check Moltbook every ${autoStatus.intervalMinutes} minutes and engage when I find something interesting.`
+            });
+          }
+          console.log(`discord: autonomous start command from msg=${message.id}`);
+          return;
+
+        case "stop":
+          if (!isAutonomousRunning()) {
+            await message.reply({ content: "Autonomous mode is not running." });
+          } else {
+            stopAutonomous();
+            await message.reply({ content: "🛑 Autonomous mode stopped. I'll wait for your prompts." });
+          }
+          console.log(`discord: autonomous stop command from msg=${message.id}`);
+          return;
+
+        case "check":
+          await message.reply({ content: "🔍 Checking Moltbook now..." });
+          console.log(`discord: manual check trigger from msg=${message.id}`);
+          // Run async so we can respond immediately
+          triggerCheck().catch(err => console.error("discord: manual check failed", err));
+          return;
+
+        case "status":
+          const report = formatStatusReport();
+          await message.reply({ content: report });
+          console.log(`discord: sent status report (autonomous) to msg=${message.id}`);
+          return;
+      }
     }
 
     // Check for read post request
