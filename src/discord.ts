@@ -170,6 +170,40 @@ function isMemoryRequest(text: string): boolean {
 }
 
 /**
+ * Build a brief state context for injecting into conversations.
+ * This ensures Loom knows its actual current state instead of hallucinating.
+ */
+function buildStateContext(): string {
+  const autoStatus = getAutonomousStatus();
+  const memStats = getMemoryStats();
+  const stateStatus = getStateStatus();
+
+  const lines = ["Current state:"];
+
+  // Autonomous mode
+  if (autoStatus.running) {
+    const lastCheck = autoStatus.lastCheck
+      ? `${Math.round((Date.now() - new Date(autoStatus.lastCheck).getTime()) / 60000)}m ago`
+      : "not yet";
+    lines.push(`- Autonomous mode: ON (checking every ${autoStatus.intervalMinutes}m, last check: ${lastCheck})`);
+  } else {
+    lines.push("- Autonomous mode: OFF");
+  }
+
+  // Today's activity
+  lines.push(`- Today: ${stateStatus.postsToday} posts, ${stateStatus.commentsToday} comments`);
+
+  // Memory
+  if (memStats.totalEntries > 0) {
+    lines.push(`- Memory: ${memStats.posts} posts, ${memStats.comments} comments written; tracking ${memStats.trackedThreads} threads`);
+  } else {
+    lines.push("- Memory: empty (no posts or comments yet)");
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * Format memory report for Discord.
  */
 function formatMemoryReport(): string {
@@ -344,16 +378,26 @@ function formatStatusReport(): string {
     lines.push(`• Status: ⏸️ Disabled`);
   }
 
-  // Add memory stats
+  // Add memory stats (always show)
   const memStats = getMemoryStats();
+  const memory = readMemory();
+  const browseCount = memory.recentBrowse?.length || 0;
+  lines.push("");
+  lines.push(`🧠 **Memory**`);
   if (memStats.totalEntries > 0) {
-    lines.push("");
-    lines.push(`🧠 **Memory**`);
-    lines.push(`• Total: ${memStats.posts} posts, ${memStats.comments} comments`);
+    lines.push(`• Written: ${memStats.posts} posts, ${memStats.comments} comments`);
     lines.push(`• Tracking: ${memStats.trackedThreads} threads`);
     if (memStats.topTopics.length > 0) {
-      lines.push(`• Top topics: ${memStats.topTopics.join(", ")}`);
+      lines.push(`• Topics: ${memStats.topTopics.join(", ")}`);
     }
+  } else {
+    lines.push(`• Written: nothing yet`);
+  }
+  if (browseCount > 0) {
+    const browseAge = Math.round((Date.now() - new Date(memory.recentBrowse[0].seenAt).getTime()) / 60000);
+    lines.push(`• Last browse: ${browseCount} posts (${browseAge}m ago)`);
+  } else {
+    lines.push(`• Last browse: none`);
   }
 
   // Add reputation stats
@@ -954,12 +998,14 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       return;
     }
 
-    // Build full context including browse memory
+    // Build full context including state and browse memory
+    const stateContext = buildStateContext();
     const browseContext = getBrowseContext();
     const fullContext = [
+      stateContext,
       context || "",
-      browseContext !== "No recent Moltbook browse recorded." ? `\n${browseContext}` : "",
-    ].filter(Boolean).join("\n");
+      browseContext !== "No recent Moltbook browse recorded." ? browseContext : "",
+    ].filter(Boolean).join("\n\n");
 
     // Generate response (use Discord personality for operator chat)
     const result = await generate({
@@ -980,7 +1026,9 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
     console.log(`discord: replied msg=${message.id} provider=${result.provider} tokens=${result.outputTokens ?? "?"}`);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : "";
     console.error(`discord: error msg=${message.id} err=${errMsg}`);
+    if (stack) console.error(`discord: stack=${stack}`);
     await message.reply({ content: "I encountered an error processing your message." }).catch(() => {});
   }
 }

@@ -60,6 +60,11 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
     userContent = `Recent context:\n${options.conversationContext}\n\nCurrent message: ${options.userMessage}`;
   }
 
+  // Log context sizes for debugging
+  const systemChars = systemPrompt.length;
+  const userChars = userContent.length;
+  console.log(`llm: generating provider=${provider} model=${model} systemChars=${systemChars} userChars=${userChars}`);
+
   if (provider === "anthropic") {
     return generateAnthropic(systemPrompt, userContent, model, maxTokens);
   } else {
