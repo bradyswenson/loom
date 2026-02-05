@@ -31,6 +31,7 @@ import {
   getReputationStats,
   readMemory,
   getBrowseContext,
+  getObservationsContext,
 } from "./memory.js";
 import {
   initAlerts,
@@ -275,6 +276,20 @@ function formatMemoryReport(): string {
     }
   }
 
+  // Recent observations
+  const observations = memory.observations || [];
+  lines.push("");
+  if (observations.length === 0) {
+    lines.push("📓 **Notes:** None yet");
+  } else {
+    lines.push(`📓 **Recent Notes** (${observations.length} total)`);
+    for (const o of observations.slice(-5)) {
+      const age = Math.round((Date.now() - new Date(o.ts).getTime()) / 60000);
+      const postRef = o.postTitle ? ` re: "${o.postTitle.slice(0, 25)}${o.postTitle.length > 25 ? "..." : ""}"` : "";
+      lines.push(`• ${o.note.slice(0, 60)}${o.note.length > 60 ? "..." : ""}${postRef} (${age}m ago)`);
+    }
+  }
+
   return lines.join("\n");
 }
 
@@ -346,13 +361,13 @@ function formatStatusReport(): string {
   ];
 
   if (status.postCooldown.allowed) {
-    lines.push(`• Posts: ✅ Ready`);
+    lines.push(`• Posts: Ready`);
   } else {
     lines.push(`• Posts: ⏳ ${status.postCooldown.reason}`);
   }
 
   if (status.commentCooldown.allowed) {
-    lines.push(`• Comments: ✅ Ready`);
+    lines.push(`• Comments: Ready`);
   } else {
     lines.push(`• Comments: ⏳ ${status.commentCooldown.reason}`);
   }
@@ -367,7 +382,7 @@ function formatStatusReport(): string {
   lines.push("");
   lines.push(`🤖 **Autonomous Mode**`);
   if (autoStatus.running) {
-    lines.push(`• Status: ✅ Running (every ${autoStatus.intervalMinutes}m)`);
+    lines.push(`• Status: Running (every ${autoStatus.intervalMinutes}m)`);
     if (autoStatus.lastCheck) {
       const lastCheck = new Date(autoStatus.lastCheck);
       const ago = Math.round((Date.now() - lastCheck.getTime()) / 60000);
@@ -419,7 +434,7 @@ function formatStatusReport(): string {
   if (!alertStatus.operatorSet) {
     lines.push(`• Status: ⚠️ No OPERATOR_DISCORD_ID set`);
   } else if (alertStatus.enabled) {
-    lines.push(`• Status: ✅ Enabled`);
+    lines.push(`• Status: Enabled`);
   } else {
     lines.push(`• Status: 🔕 Disabled`);
   }
@@ -433,18 +448,25 @@ function formatStatusReport(): string {
  */
 function extractReadPostRequest(text: string): string | null {
   // Match patterns like "read post abc123", "show me post abc123", "moltbook post abc123"
+  // Post IDs are UUIDs or alphanumeric strings, not common words
+  const commonWords = new Set(["on", "about", "to", "for", "in", "a", "the", "this", "that", "it", "moltbook"]);
+
   const patterns = [
-    /(?:read|show|get|fetch|view)\s+(?:me\s+)?(?:moltbook\s+)?post\s+(\S+)/i,
-    /(?:moltbook\s+)?post\s+(\S+)/i,
-    /what(?:'s| is| does)\s+(?:moltbook\s+)?post\s+(\S+)/i,
-    /moltbook\.com\/post\/(\S+)/i,
+    /(?:read|show|get|fetch|view)\s+(?:me\s+)?(?:moltbook\s+)?post\s+([a-f0-9-]{8,}|\S+)/i,
+    /what(?:'s| is| does)\s+(?:moltbook\s+)?post\s+([a-f0-9-]{8,})/i,
+    /moltbook\.com\/post\/([a-f0-9-]+)/i,
   ];
 
   for (const p of patterns) {
     const match = text.match(p);
     if (match && match[1]) {
-      // Clean up the ID (remove trailing punctuation)
-      return match[1].replace(/[.,!?;:]+$/, "");
+      const candidate = match[1].replace(/[.,!?;:]+$/, "").toLowerCase();
+      // Skip if it's a common word
+      if (commonWords.has(candidate)) continue;
+      // Must look like a post ID (contains numbers/dashes or is long enough)
+      if (candidate.length >= 8 || /[0-9-]/.test(candidate)) {
+        return match[1].replace(/[.,!?;:]+$/, "");
+      }
     }
   }
   return null;
@@ -998,13 +1020,15 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       return;
     }
 
-    // Build full context including state and browse memory
+    // Build full context including state, browse memory, and observations
     const stateContext = buildStateContext();
     const browseContext = getBrowseContext();
+    const observationsContext = getObservationsContext();
     const fullContext = [
       stateContext,
       context || "",
       browseContext !== "No recent Moltbook browse recorded." ? browseContext : "",
+      observationsContext,
     ].filter(Boolean).join("\n\n");
 
     // Generate response (use Discord personality for operator chat)

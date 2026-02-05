@@ -48,10 +48,20 @@ export interface SeenPost {
   seenAt: string;                // ISO timestamp
 }
 
+export interface Observation {
+  id: string;
+  ts: string;                    // ISO timestamp
+  postId?: string;               // Post this observation is about (if any)
+  postTitle?: string;
+  note: string;                  // Loom's thought/observation
+  topics: string[];              // Related topics
+}
+
 export interface LoomMemory {
   entries: MemoryEntry[];
   threads: ThreadEntry[];        // Posts we're following
   recentBrowse: SeenPost[];      // Posts seen during recent autonomous checks
+  observations: Observation[];   // Loom's notes about interesting things
   version: number;
 }
 
@@ -60,11 +70,13 @@ function getDefaultMemory(): LoomMemory {
     entries: [],
     threads: [],
     recentBrowse: [],
+    observations: [],
     version: 1,
   };
 }
 
 const MAX_BROWSE_ENTRIES = 20; // Keep last 20 posts seen
+const MAX_OBSERVATIONS = 50;   // Keep last 50 observations
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -566,6 +578,65 @@ export function getBrowseContext(): string {
     if (p.contentPreview) {
       lines.push(`  ${p.contentPreview}${p.contentPreview.length >= 150 ? "..." : ""}`);
     }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Record an observation about something interesting.
+ */
+export function recordObservation(
+  note: string,
+  postId?: string,
+  postTitle?: string,
+  topics?: string[]
+): void {
+  const memory = readMemory();
+
+  const observation: Observation = {
+    id: `obs-${Date.now()}`,
+    ts: new Date().toISOString(),
+    postId,
+    postTitle,
+    note,
+    topics: topics || [],
+  };
+
+  memory.observations = memory.observations || [];
+  memory.observations.push(observation);
+
+  // Trim to max
+  if (memory.observations.length > MAX_OBSERVATIONS) {
+    memory.observations = memory.observations.slice(-MAX_OBSERVATIONS);
+  }
+
+  writeMemory(memory);
+  console.log(`memory: recorded observation${postTitle ? ` about "${postTitle}"` : ""}`);
+}
+
+/**
+ * Get recent observations.
+ */
+export function getRecentObservations(limit: number = 10): Observation[] {
+  const memory = readMemory();
+  return (memory.observations || []).slice(-limit);
+}
+
+/**
+ * Get observations context for conversations.
+ */
+export function getObservationsContext(): string {
+  const obs = getRecentObservations(5);
+  if (obs.length === 0) {
+    return "";
+  }
+
+  const lines = ["My recent observations:"];
+  for (const o of obs) {
+    const age = Math.round((Date.now() - new Date(o.ts).getTime()) / 60000);
+    const aboutPost = o.postTitle ? ` (about "${o.postTitle.slice(0, 30)}${o.postTitle.length > 30 ? "..." : ""}")` : "";
+    lines.push(`• ${age}m ago${aboutPost}: ${o.note}`);
   }
 
   return lines.join("\n");

@@ -19,6 +19,7 @@ The doctrine is compiled into the system prompt at startup. DISCORD.md is append
 - **Moltbook integration** — posts, comments, and reads from the agent social network
 - **Autonomous mode** — periodically browses Moltbook and engages independently
 - **Memory system** — tracks topics written about to avoid repetition and build coherent presence
+- **Observations** — takes notes about interesting posts during browsing for later conversation
 - **Thread tracking** — follows posts Loom has engaged with, checks for new replies
 - **Reputation tracking** — monitors upvotes/downvotes, feeds back into decision-making
 - **Operator alerts** — DMs you when posts get replies, gain traction, or Loom acts autonomously
@@ -90,6 +91,7 @@ Loom responds to DMs and @mentions. Special commands:
 
 ### Status & Reports
 - `status` — show cooldowns, daily limits, autonomous mode, memory, reputation, alerts
+- `memory` — show memory report including posts, comments, tracked threads, and observations
 - `activity` / `report` — show recent publish receipts
 - `what have you done` — activity report
 
@@ -110,11 +112,11 @@ Loom responds to DMs and @mentions. Special commands:
 ## Operator Alerts
 
 When `OPERATOR_DISCORD_ID` is set, Loom will DM you about:
-- 💬 New replies to your posts
+- 💬 Direct replies to Loom's comments (with content preview)
 - 📈 Posts gaining traction (5+ upvotes)
 - 🚀 Posts with significant traction (10+ upvotes)
-- 📝 Autonomous posts Loom creates
-- 💬 Autonomous comments Loom makes
+- 📝 Autonomous posts Loom creates (with content preview)
+- 💬 Autonomous comments Loom makes (with content preview)
 
 ## Health Check
 
@@ -173,7 +175,7 @@ See `doctrine/` for full specifications.
 State is stored in `/data` (mounted volume on Fly.io):
 
 - `loom-state.json` — cooldowns, daily counters, stop conditions
-- `loom-memory.json` — topic memory, thread tracking, reputation data
+- `loom-memory.json` — topic memory, thread tracking, reputation data, observations
 - `publish-receipts.jsonl` — audit log of all publish attempts
 
 ## License

@@ -29,11 +29,12 @@ import {
   getThreadsToCheck,
   updateThread,
   recordBrowse,
+  recordObservation,
   type ThreadEntry,
 } from "./memory.js";
 import { getPost, getComments } from "./moltbook.js";
 import {
-  alertNewReplies,
+  alertDirectReply,
   alertTraction,
   alertAutonomousAction,
 } from "./alerts.js";
@@ -142,6 +143,9 @@ interface AutonomousDecision {
   content?: string;
   postId?: string;
   reason?: string;
+  observation?: string;  // Brief note about what's interesting (for OBSERVE)
+  observePostId?: string;
+  observePostTitle?: string;
 }
 
 function parseDecision(response: string): AutonomousDecision {
@@ -168,6 +172,12 @@ function parseDecision(response: string): AutonomousDecision {
       decision.postId = value;
     } else if (k === "REASON") {
       decision.reason = value;
+    } else if (k === "OBSERVATION" || k === "NOTE") {
+      decision.observation = value;
+    } else if (k === "OBSERVE_POST_ID" || k === "ABOUT_POST_ID") {
+      decision.observePostId = value;
+    } else if (k === "OBSERVE_POST_TITLE" || k === "ABOUT_POST_TITLE") {
+      decision.observePostTitle = value;
     }
   }
 
@@ -175,6 +185,12 @@ function parseDecision(response: string): AutonomousDecision {
   const contentMatch = response.match(/CONTENT:\s*([\s\S]*?)(?=\n[A-Z_]+:|$)/i);
   if (contentMatch) {
     decision.content = contentMatch[1].trim();
+  }
+
+  // Handle multi-line observation
+  const obsMatch = response.match(/(?:OBSERVATION|NOTE):\s*([\s\S]*?)(?=\n[A-Z_]+:|$)/i);
+  if (obsMatch) {
+    decision.observation = obsMatch[1].trim();
   }
 
   return decision;
@@ -189,6 +205,7 @@ let threadsWithActivity: Array<{
 
 /**
  * Check tracked threads for new activity.
+ * Only alerts on DIRECT replies to Loom's comments (not all new comments).
  */
 async function checkTrackedThreads(): Promise<void> {
   const threads = getThreadsToCheck(48); // Check threads from last 48 hours
@@ -217,17 +234,32 @@ async function checkTrackedThreads(): Promise<void> {
         });
         console.log(`autonomous: Thread "${thread.postTitle}" has ${changes.newComments} new comments, ${changes.upvoteChange > 0 ? "+" : ""}${changes.upvoteChange} upvotes`);
 
-        // Send alerts for new replies
-        if (changes.newComments > 0) {
-          alertNewReplies(
-            thread.postId,
-            thread.postTitle,
-            changes.newComments,
-            post.comment_count || 0
-          ).catch(err => console.error("autonomous: Failed to send reply alert:", err));
+        // Check for DIRECT replies to Loom's comments (not all new comments)
+        if (changes.newComments > 0 && thread.ourCommentIds.length > 0) {
+          try {
+            const commentsResult = await getComments(thread.postId, "new");
+            if (commentsResult.ok && commentsResult.comments) {
+              // Find comments that are direct replies to our comments
+              const ourCommentIdSet = new Set(thread.ourCommentIds);
+              const directReplies = commentsResult.comments.filter(
+                c => c.parent_id && ourCommentIdSet.has(c.parent_id)
+              );
+
+              for (const reply of directReplies) {
+                alertDirectReply(
+                  thread.postId,
+                  thread.postTitle,
+                  reply.author,
+                  reply.content
+                ).catch(err => console.error("autonomous: Failed to send direct reply alert:", err));
+              }
+            }
+          } catch (err) {
+            console.error(`autonomous: Error fetching comments for ${thread.postId}:`, err);
+          }
         }
 
-        // Send alerts for traction
+        // Send alerts for traction (only for posts WE created)
         if (changes.upvoteChange > 0) {
           alertTraction(
             thread.postId,
@@ -346,9 +378,12 @@ ACTION: COMMENT
 POST_ID: [id of the post]
 CONTENT: [your comment]
 
-To observe:
+To observe (still note what's interesting!):
 ACTION: OBSERVE
-REASON: [brief reason]`;
+REASON: [brief reason why not acting]
+OBSERVATION: [1-2 sentences about what caught your interest or what you noticed]
+ABOUT_POST_ID: [optional - id of the most interesting post]
+ABOUT_POST_TITLE: [optional - title of that post]`;
 
   try {
     const result = await generate({
@@ -366,7 +401,7 @@ REASON: [brief reason]`;
     } else if (decision.action === "comment" && canComment) {
       await executeComment(decision, posts);
     } else {
-      // Observe
+      // Observe - but still record any observations
       consecutiveAbstains++;
       const receipt: PublishReceipt = {
         ts: new Date().toISOString(),
@@ -377,6 +412,15 @@ REASON: [brief reason]`;
       };
       appendReceipt(receipt);
       console.log(`autonomous: Observing - ${decision.reason || "no specific reason"}`);
+
+      // Record observation to memory if provided
+      if (decision.observation) {
+        recordObservation(
+          decision.observation,
+          decision.observePostId,
+          decision.observePostTitle
+        );
+      }
     }
   } catch (err) {
     console.error("autonomous: Error during check:", err);
@@ -427,8 +471,8 @@ async function executePost(decision: AutonomousDecision, posts: MoltbookPost[]):
     consecutiveAbstains = 0;
     console.log(`autonomous: Posted successfully! ID: ${result.post.id}`);
 
-    // Alert operator about autonomous post
-    alertAutonomousAction("post", decision.title, result.post.id, submolt)
+    // Alert operator about autonomous post (include content preview)
+    alertAutonomousAction("post", decision.title, result.post.id, submolt, decision.content)
       .catch(err => console.error("autonomous: Failed to send action alert:", err));
   } else {
     console.error(`autonomous: Failed to post: ${result.error}`);
@@ -484,8 +528,10 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
     consecutiveAbstains = 0;
     console.log(`autonomous: Comment posted successfully!`);
 
-    // Alert operator about autonomous comment
-    alertAutonomousAction("comment", targetPost.title, decision.postId, targetPost.submolt)
+    // Alert operator about autonomous comment (include content preview)
+    // Ensure submolt is a string (not an object)
+    const submoltName = typeof targetPost.submolt === "string" ? targetPost.submolt : undefined;
+    alertAutonomousAction("comment", targetPost.title, decision.postId, submoltName, decision.content)
       .catch(err => console.error("autonomous: Failed to send action alert:", err));
   } else {
     console.error(`autonomous: Failed to comment: ${result.error}`);

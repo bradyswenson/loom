@@ -79,24 +79,27 @@ function eventKey(type: string, id: string, threshold?: number): string {
 }
 
 /**
- * Alert about new replies to a tracked thread.
+ * Alert about direct replies to Loom's comments.
+ * Only alerts when someone replies directly TO one of Loom's comments.
  */
-export async function alertNewReplies(
+export async function alertDirectReply(
   postId: string,
   postTitle: string,
-  newReplies: number,
-  totalReplies: number
+  replyAuthor: string,
+  replyPreview: string
 ): Promise<void> {
-  if (!canAlert() || newReplies < REPLY_THRESHOLD) return;
+  if (!canAlert()) return;
 
-  const key = eventKey("reply", postId, totalReplies);
+  // Use a unique key for this specific reply
+  const key = eventKey("direct_reply", `${postId}:${replyAuthor}:${Date.now()}`);
   if (alertedEvents.has(key)) return;
   alertedEvents.add(key);
 
-  const message = `💬 **New reply${newReplies > 1 ? "s" : ""}** on your post!\n\n` +
-    `"${postTitle}"\n` +
-    `${newReplies} new comment${newReplies > 1 ? "s" : ""} (${totalReplies} total)\n\n` +
-    `https://www.moltbook.com/post/${postId}`;
+  // Wrap URL in <> to disable link preview
+  const message = `💬 **${replyAuthor}** replied to your comment\n\n` +
+    `On: "${postTitle}"\n` +
+    `"${replyPreview.slice(0, 200)}${replyPreview.length > 200 ? "..." : ""}"\n\n` +
+    `<https://www.moltbook.com/post/${postId}>`;
 
   await sendOperatorDM(message);
 }
@@ -130,23 +133,26 @@ export async function alertTraction(
   const message = `${emoji} **Post gaining traction!**\n\n` +
     `"${postTitle}"\n` +
     `Now at ${upvotes} upvotes\n\n` +
-    `https://www.moltbook.com/post/${postId}`;
+    `<https://www.moltbook.com/post/${postId}>`;
 
   await sendOperatorDM(message);
 }
 
 /**
  * Alert when Loom posts or comments autonomously.
+ * Includes preview of the content so operator can see what was said.
  */
 export async function alertAutonomousAction(
   action: "post" | "comment",
   title: string,
   postId: string,
-  submolt?: string
+  submolt?: string,
+  contentPreview?: string
 ): Promise<void> {
   if (!canAlert()) return;
 
-  const key = eventKey("action", postId);
+  // Use timestamp to allow multiple alerts for same post (e.g., multiple comments)
+  const key = eventKey("action", `${postId}:${action}:${Date.now()}`);
   if (alertedEvents.has(key)) return;
   alertedEvents.add(key);
 
@@ -154,9 +160,15 @@ export async function alertAutonomousAction(
   const actionText = action === "post" ? "posted" : "commented on";
   const locationText = submolt ? ` in ${submolt}` : "";
 
-  const message = `${emoji} **Loom ${actionText}${locationText}**\n\n` +
-    `"${title}"\n\n` +
-    `https://www.moltbook.com/post/${postId}`;
+  let message = `${emoji} **Loom ${actionText}${locationText}**\n\n` +
+    `"${title}"`;
+
+  if (contentPreview) {
+    const preview = contentPreview.slice(0, 300);
+    message += `\n\n>>> ${preview}${contentPreview.length > 300 ? "..." : ""}`;
+  }
+
+  message += `\n\n<https://www.moltbook.com/post/${postId}>`;
 
   await sendOperatorDM(message);
 }
