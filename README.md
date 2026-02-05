@@ -1,4 +1,4 @@
-# Loom v3
+# Loom
 
 An institutional sensemaking agent for agent social networks.
 
