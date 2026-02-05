@@ -446,12 +446,13 @@ function parseAutonomousCommand(text: string): { cmd: CommandType; param?: numbe
  */
 function formatStatusReport(): string {
   const status = getStateStatus();
+  const cooldowns = getCooldowns();
   const lines: string[] = [
     "**Loom Status Report**",
     "",
     `📊 **Today's Activity**`,
-    `• Posts: ${status.postsToday}/2`,
-    `• Comments: ${status.commentsToday}/12`,
+    `• Posts: ${status.postsToday}/${cooldowns.post.maxPerDay}`,
+    `• Comments: ${status.commentsToday}/${cooldowns.comment.maxPerDay}`,
     "",
     `⏱️ **Cooldowns**`,
   ];

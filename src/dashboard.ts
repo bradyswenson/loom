@@ -511,7 +511,7 @@ function getDashboardHTML(): string {
           <div class="event-title">\${escapeHtml(e.title)}</div>
           \${e.content ? \`<div class="event-content">\${escapeHtml(e.content)}...</div>\` : ''}
           <div class="event-meta">
-            \${e.submolt ? \`<span class="tag">\${e.submolt}</span>\` : ''}
+            \${e.submolt ? \`<span class="tag">\${typeof e.submolt === 'string' ? e.submolt : ''}</span>\` : ''}
             \${e.autonomous ? '<span class="tag auto">autonomous</span>' : ''}
             \${e.postId ? \`<a href="https://www.moltbook.com/post/\${e.postId}" target="_blank" onclick="event.stopPropagation()">View on Moltbook</a>\` : ''}
           </div>
@@ -814,12 +814,38 @@ function getDashboardHTML(): string {
       try {
         const res = await fetch('/api/search?q=' + encodeURIComponent(query));
         const data = await res.json();
-        renderTimeline([]); // Clear timeline during search
-        renderMemory({ entries: [...data.posts, ...data.comments], threads: data.threads, observations: data.observations });
+
+        // Combine search results for timeline view
+        const searchEvents = [];
+        for (const p of data.posts || []) {
+          searchEvents.push({ type: 'post', ts: p.ts, title: p.title || 'Untitled', content: p.summary?.slice(0, 200), postId: p.id, entryId: p.id, submolt: p.submolt, autonomous: p.autonomous });
+        }
+        for (const c of data.comments || []) {
+          searchEvents.push({ type: 'comment', ts: c.ts, title: 'Comment on: ' + (c.targetPostTitle || 'Unknown'), content: c.summary?.slice(0, 200), postId: c.targetPostId, entryId: c.id, submolt: c.submolt, autonomous: c.autonomous });
+        }
+        for (const o of data.observations || []) {
+          searchEvents.push({ type: 'observation', ts: o.ts, title: o.postTitle || 'General observation', content: o.note, postId: o.postId });
+        }
+        searchEvents.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
+
+        // Build entry map for clickability
+        const allEntries = [...(data.posts || []), ...(data.comments || [])];
+
+        // Render search results to timeline
+        const panel = document.getElementById('timeline-panel');
+        if (searchEvents.length === 0) {
+          panel.innerHTML = '<div class="empty">No results found for "' + escapeHtml(query) + '"</div>';
+        } else {
+          panel.innerHTML = '<div style="margin-bottom: 15px; color: #8b949e;">Found ' + searchEvents.length + ' results for "' + escapeHtml(query) + '"</div>';
+          renderTimeline(searchEvents, allEntries);
+        }
+
+        renderMemory({ entries: [...(data.posts || []), ...(data.comments || [])], threads: data.threads, observations: data.observations });
         renderThreads(data.threads);
         renderObservations(data.observations);
       } catch (err) {
         console.error('Search failed:', err);
+        document.getElementById('timeline-panel').innerHTML = '<div class="empty">Search failed</div>';
       }
     }
 
@@ -992,12 +1018,19 @@ export function handleDashboardRequest(
     const actionCount = receipts.filter((r) => r.action === "post" || r.action === "comment").length;
     const observeCount = receipts.filter((r) => r.action === "abstain").length;
 
-    // Reputation by entry (for posts)
-    const reputationData = memory.threads.map((t) => ({
-      title: t.postTitle.slice(0, 30),
-      upvotes: t.lastKnownUpvotes,
-      comments: t.lastKnownCommentCount,
-    })).sort((a, b) => b.upvotes - a.upvotes).slice(0, 10);
+    // Reputation by entry (only for Loom's OWN posts, not posts Loom commented on)
+    // Get set of post IDs that Loom authored
+    const loomPostIds = new Set(posts.map((p) => p.id));
+    // Filter threads to only those where Loom authored the post
+    const reputationData = memory.threads
+      .filter((t) => loomPostIds.has(t.postId))
+      .map((t) => ({
+        title: t.postTitle.slice(0, 30),
+        upvotes: t.lastKnownUpvotes,
+        comments: t.lastKnownCommentCount,
+      }))
+      .sort((a, b) => b.upvotes - a.upvotes)
+      .slice(0, 10);
 
     // Topics frequency
     const topicCounts: Record<string, number> = {};
