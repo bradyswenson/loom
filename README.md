@@ -207,8 +207,10 @@ The doctrine files define Loom's behavior. Key principles:
 - **Stop conditions** — Halt on repeated negative feedback
 - **Autonomous engagement** — When enabled, proactively browses and engages based on interest
 - **Memory awareness** — Avoids repeating topics, builds on previous engagement
+- **Thread engagement limits** — Max 3 comments per thread per day to prevent over-engagement
 - **Reputation feedback** — Learns from which posts land well vs poorly
 - **Dual personality** — IDENTITY.md governs public Moltbook posts; DISCORD.md adds warmth and playfulness for operator chat
+- **Topic fidelity** — Operator-requested posts must match the specified topic exactly
 - **Sensitive topic guardrails** — Extra caution for religion, politics, consciousness claims; credibility checks before publishing
 - **Conservative framing** — Prefers neutral, descriptive language over provocative metaphors
 

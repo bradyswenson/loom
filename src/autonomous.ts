@@ -31,6 +31,8 @@ import {
   updateThread,
   recordBrowse,
   recordObservation,
+  canCommentOnThread,
+  getHeavilyEngagedThreadsToday,
   type ThreadEntry,
 } from "./memory.js";
 import { getPost, getComments } from "./moltbook.js";
@@ -369,6 +371,12 @@ async function runAutonomousCheck(): Promise<void> {
   const reputationContext = getReputationContext();
   const observationsContext = getObservationsContext(10);
 
+  // Get threads we've already engaged with heavily today (to prevent gravity wells)
+  const heavyThreads = getHeavilyEngagedThreadsToday();
+  const heavyThreadsContext = heavyThreads.length > 0
+    ? `\n⚠️ THREADS YOU'VE COMMENTED ON HEAVILY TODAY (spread your engagement):\n${heavyThreads.map(t => `- "${t.title}" (${t.commentCount} comments today - ${t.commentCount >= 3 ? "MAXED OUT" : "limit approaching"})`).join("\n")}\n`
+    : "";
+
   // Build the autonomous prompt
   const availableActions: string[] = [];
   if (canPost) availableActions.push("POST - Create a new post with your own synthesis or take");
@@ -383,7 +391,7 @@ ${submolts}
 
 YOUR MEMORY:
 ${memoryContext}
-${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}${observationsContext ? `\n${observationsContext}\n` : ""}
+${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}${heavyThreadsContext}${observationsContext ? `\n${observationsContext}\n` : ""}
 AVAILABLE ACTIONS:
 ${availableActions.map((a, i) => `${i + 1}. ${a}`).join("\n")}
 
@@ -395,7 +403,8 @@ DECISION CRITERIA:
 - Consider starting new conversations on topics you care about
 - Don't just react — bring your own perspective
 - Avoid repeating topics you've recently covered (check YOUR MEMORY above)
-- If you've engaged with a thread before, consider continuing that conversation
+- SPREAD YOUR ENGAGEMENT across multiple threads — max 3 comments per thread per day
+- If you've already commented 2+ times on a thread today, find a DIFFERENT thread
 - Check your OBSERVATIONS — you may have noted something worth following up on
 - When observing, write detailed notes that will help you understand context later
 - If nothing catches your attention, OBSERVE is fine, but don't be too passive
@@ -545,7 +554,23 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
     return;
   }
 
-  console.log(`autonomous: Commenting on post ${decision.postId} ("${targetPost.title}")`);
+  // Check per-thread comment limit (prevent gravity wells)
+  const threadCheck = canCommentOnThread(decision.postId);
+  if (!threadCheck.allowed) {
+    console.log(`autonomous: Thread "${targetPost.title}" at comment limit (${threadCheck.count}/${threadCheck.max} today), skipping`);
+    // Record as abstain with specific reason
+    const receipt: PublishReceipt = {
+      ts: new Date().toISOString(),
+      action: "abstain",
+      success: true,
+      reason: `Per-thread limit reached on "${targetPost.title}" (${threadCheck.count}/${threadCheck.max} today)`,
+      autonomous: true,
+    };
+    appendReceipt(receipt);
+    return;
+  }
+
+  console.log(`autonomous: Commenting on post ${decision.postId} ("${targetPost.title}") [${threadCheck.count + 1}/${threadCheck.max} today]`);
 
   const result = await createComment({
     postId: decision.postId,

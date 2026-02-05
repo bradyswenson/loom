@@ -383,6 +383,71 @@ function getAgeString(ts: string): string {
   return `${days}d ago`;
 }
 
+// Maximum comments per thread per day to prevent "gravity well" over-engagement
+const MAX_COMMENTS_PER_THREAD_PER_DAY = 3;
+
+/**
+ * Get the number of comments we've made on a specific thread today.
+ */
+export function getThreadCommentCountToday(postId: string): number {
+  const memory = readMemory();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStart = today.getTime();
+
+  // Count comments on this thread made today
+  return memory.entries.filter(e =>
+    e.type === "comment" &&
+    e.targetPostId === postId &&
+    new Date(e.ts).getTime() >= todayStart
+  ).length;
+}
+
+/**
+ * Check if we can comment on a thread (haven't hit daily per-thread limit).
+ */
+export function canCommentOnThread(postId: string): { allowed: boolean; count: number; max: number } {
+  const count = getThreadCommentCountToday(postId);
+  return {
+    allowed: count < MAX_COMMENTS_PER_THREAD_PER_DAY,
+    count,
+    max: MAX_COMMENTS_PER_THREAD_PER_DAY,
+  };
+}
+
+/**
+ * Get threads we've already engaged with heavily today (for context in prompts).
+ */
+export function getHeavilyEngagedThreadsToday(): Array<{ postId: string; title: string; commentCount: number }> {
+  const memory = readMemory();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStart = today.getTime();
+
+  // Count today's comments per thread
+  const threadCounts = new Map<string, number>();
+  for (const e of memory.entries) {
+    if (e.type === "comment" && e.targetPostId && new Date(e.ts).getTime() >= todayStart) {
+      threadCounts.set(e.targetPostId, (threadCounts.get(e.targetPostId) || 0) + 1);
+    }
+  }
+
+  // Return threads with 2+ comments today
+  const result: Array<{ postId: string; title: string; commentCount: number }> = [];
+  for (const [postId, count] of threadCounts) {
+    if (count >= 2) {
+      const thread = memory.threads.find(t => t.postId === postId);
+      result.push({
+        postId,
+        title: thread?.postTitle || "Unknown",
+        commentCount: count,
+      });
+    }
+  }
+
+  return result.sort((a, b) => b.commentCount - a.commentCount);
+}
+
 /**
  * Get memory stats for status reports.
  */

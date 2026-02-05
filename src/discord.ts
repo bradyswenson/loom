@@ -728,28 +728,50 @@ async function handleMoltbookPost(message: Message, text: string, context: strin
   const topic = extractPostTopic(text);
   const explicitPost = isExplicitPostRequest(text);
 
+  // Minimum input length gate - prevent ambiguous/confused posts like "Do?"
+  const MIN_TOPIC_LENGTH = 10; // At least 10 characters for a meaningful topic
+  const hasContext = context.trim().length > 20; // Has recent conversation context
+
+  if (explicitPost && topic.length < MIN_TOPIC_LENGTH && !hasContext) {
+    await message.reply({
+      content: `I need a bit more to work with. What topic should I post about?\n\nExample: "post to moltbook about institutional sensemaking in agent networks"`
+    });
+    return;
+  }
+
+  // If topic is very short but we have context, use context-based posting
+  const useContextBased = topic.length < MIN_TOPIC_LENGTH && hasContext;
+
   // If user explicitly wants a POST, use a direct prompt (no COMMENT/ABSTAIN options)
   let prompt: string;
 
   if (explicitPost) {
     // User explicitly requested a POST - honor that directly
-    prompt = `The operator has EXPLICITLY asked you to create a NEW POST on Moltbook${topic ? ` about: "${topic}"` : ""}.
+    const hasMeaningfulTopic = topic.length >= MIN_TOPIC_LENGTH;
 
-CURRENT MOLTBOOK STATE (for context, NOT to redirect to a comment):
+    prompt = `The operator has EXPLICITLY asked you to create a NEW POST on Moltbook.
+
+${hasMeaningfulTopic ? `**CRITICAL: YOUR POST MUST BE ABOUT THIS EXACT TOPIC:**
+"${topic}"
+
+Your title and content MUST directly address "${topic}". Do NOT post about a different topic, even if it seems related or more interesting. The operator specified this topic for a reason.` : `Discord context:\n${context}\n\nBase your post on this conversation. The operator didn't specify a detailed topic, so synthesize from the recent discussion.`}
+
+CURRENT MOLTBOOK STATE (for context only - do NOT let this change your topic):
 ${feed}
 
 ${submolts}
 
-You MUST create a new post. The operator has specifically requested a POST, not a comment.
-Even if similar topics exist, your perspective adds value. Create an original post.
-
-${topic ? "" : `Discord context:\n${context}\n\n`}Choose the most appropriate submolt for your post.
+RULES:
+1. You MUST create a new post (not a comment)
+2. ${hasMeaningfulTopic ? `Your post MUST be about "${topic}" - not a tangentially related topic` : "Base your post on the Discord conversation above"}
+3. Even if similar topics exist on Moltbook, YOUR perspective adds value
+4. Choose the most appropriate submolt
 
 Format your response EXACTLY as:
 ACTION: POST
 SUBMOLT: [submolt name]
-TITLE: [title]
-CONTENT: [post body]`;
+TITLE: [title that clearly relates to ${hasMeaningfulTopic ? `"${topic}"` : "the conversation"}]
+CONTENT: [post body directly addressing ${hasMeaningfulTopic ? `"${topic}"` : "the topic from conversation"}]`;
   } else {
     // General engagement request - give options
     const basePrompt = `CURRENT MOLTBOOK STATE:
