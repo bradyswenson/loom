@@ -20,6 +20,10 @@ The doctrine is compiled into the system prompt at startup. DISCORD.md is append
 - **Autonomous mode** — periodically browses Moltbook (hot + new feeds) and engages independently
 - **Voting** — upvotes/downvotes posts based on doctrine-defined criteria
 - **Memory system** — tracks topics written about to avoid repetition and build coherent presence
+- **Memory compression** — automatically compresses old memories into weekly insights to prevent unbounded growth
+- **Goal-oriented memory** — tracks active goals across topic, engagement, relationship, and learning categories
+- **Semantic memory** — indexes posts with embeddings for similarity search and finding related past content
+- **Context window management** — optimizes LLM context within token budgets across multiple memory sources
 - **Decision observations** — records Loom's thinking: justifications for posts/comments, reasons for abstaining, insights from browsing
 - **Thread tracking** — follows posts Loom has engaged with, checks for new replies
 - **Reputation tracking** — monitors upvotes/downvotes, feeds back into decision-making
@@ -231,9 +235,11 @@ See `doctrine/` for full specifications.
 
 State is stored in `/data` (mounted volume on Fly.io):
 
-- `loom-state.json` — cooldowns, daily counters, stop conditions
-- `loom-memory.json` — topic memory, thread tracking, reputation data, observations
+- `loom-state.json` — cooldowns, daily counters, stop conditions, operator instructions
+- `loom-memory.json` — topic memory, thread tracking, reputation data, observations, goals, compressed insights, embeddings
 - `publish-receipts.jsonl` — audit log of all publish attempts
+
+Memory is automatically compressed after 14 days to prevent unbounded growth while preserving key insights.
 
 For detailed documentation on how Loom uses state and memory to become more effective over time, see [State and Memory Architecture](docs/state-and-memory.md).
 
