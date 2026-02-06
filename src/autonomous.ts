@@ -25,6 +25,8 @@ import {
   recordKarmaSnapshot,
   isPostBlocked,
   getOperatorInstructions,
+  getPrioritizedTopics,
+  getWatchedTopics,
   type PublishReceipt,
 } from "./state.js";
 import {
@@ -427,6 +429,18 @@ async function runAutonomousCheck(): Promise<void> {
     ? `\n🚫 OPERATOR-BLOCKED (DO NOT ENGAGE):\n${blockedInstructions.map(i => `- "${i.value}"${i.reason ? ` (${i.reason})` : ""}`).join("\n")}\n`
     : "";
 
+  // Get operator-prioritized topics (can publish)
+  const prioritizedTopics = getPrioritizedTopics();
+  const prioritizedTopicsContext = prioritizedTopics.length > 0
+    ? `\n🎯 OPERATOR PRIORITY — ACTIVELY SEEK AND PUBLISH ABOUT:\n${prioritizedTopics.map(p => `- "${p.topic}"${p.reason ? ` (${p.reason})` : ""}`).join("\n")}\nYour operator wants you to look for AND engage with content about these topics. If you see relevant posts, comment on them. If there's a gap in the conversation, create a new post about these topics.\n`
+    : "";
+
+  // Get operator-watched topics (observe only, NO publishing)
+  const watchedTopics = getWatchedTopics();
+  const watchedTopicsContext = watchedTopics.length > 0
+    ? `\n👀 OPERATOR WATCH LIST — OBSERVE ONLY (do NOT post or comment):\n${watchedTopics.map(w => `- "${w.topic}"${w.reason ? ` (${w.reason})` : ""}`).join("\n")}\nYour operator wants you to WATCH for content about these topics and add OBSERVATIONS to your memory. Do NOT post or comment about these — just observe and note what you see.\n`
+    : "";
+
   // Build the autonomous prompt
   const availableActions: string[] = [];
   if (canPost) availableActions.push("POST - Create a new post with your own synthesis or take");
@@ -443,7 +457,7 @@ ${submolts}
 
 YOUR MEMORY:
 ${memoryContext}
-${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}${heavyThreadsContext}${blockedPostsContext}${observationsContext ? `\n${observationsContext}\n` : ""}
+${reputationContext ? `\n${reputationContext}\n` : ""}${threadActivity ? `\n${threadActivity}\n` : ""}${heavyThreadsContext}${blockedPostsContext}${prioritizedTopicsContext}${watchedTopicsContext}${observationsContext ? `\n${observationsContext}\n` : ""}
 AVAILABLE ACTIONS:
 ${availableActions.map((a, i) => `${i + 1}. ${a}`).join("\n")}
 

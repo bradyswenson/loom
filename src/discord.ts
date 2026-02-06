@@ -24,6 +24,9 @@ import {
   removeOperatorInstruction,
   getOperatorInstructions,
   clearOperatorInstructions,
+  getPrioritizedTopics,
+  getWatchedTopics,
+  clearPrioritizedTopics,
   type PublishReceipt,
 } from "./state.js";
 import {
@@ -252,6 +255,16 @@ function formatCommandsHelp(): string {
 • \`stop autonomous\` — disable autonomous browsing
 • \`check moltbook\` — trigger immediate check
 • \`set interval [N]\` — set check interval (minutes)
+
+🎯 **Topic Directives**
+• \`look for [topic]\` — watch for a topic (observations only)
+• \`look for and publish about [topic]\` — seek AND post/comment about it
+• \`focus on [topic]\` — same as publish
+• \`list focuses\` — show current watch/publish topics
+• \`clear focus [topic]\` — remove a specific focus
+• \`clear all focuses\` — remove all focus topics
+• \`block [post/topic]\` — don't engage with matching content
+• \`list blocks\` — show blocked posts/topics
 
 ⏱️ **Cooldowns**
 • \`set post cooldown [N]h\` or \`[N]m\` — set post interval
@@ -535,6 +548,79 @@ function parseBlockInstruction(text: string): { action: "block" | "unblock" | "l
     const match = text.match(pattern);
     if (match && match[1]) {
       return { action: "unblock", target: match[1].trim() };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse focus/priority instructions from operator.
+ * Recognizes patterns like:
+ * - "look for X" → watch only (observations)
+ * - "watch for X" → watch only (observations)
+ * - "look for and publish about X" → publish (observations + posts + comments)
+ * - "focus on X" → publish
+ * - "publish about X" → publish
+ * - "list focuses" / "show focuses"
+ * - "clear focus on X" / "remove focus X"
+ * - "clear all focuses"
+ */
+function parseFocusInstruction(text: string): { action: "watch" | "publish" | "unfocus" | "list" | "clear"; target?: string } | null {
+  const lower = text.toLowerCase().trim();
+
+  // List focus topics
+  if (/^(list|show)\s+(focus(es)?|priorities|topics|watches)/.test(lower) || lower === "focuses" || lower === "priorities") {
+    return { action: "list" };
+  }
+
+  // Clear all focuses
+  if (/^clear\s+(all\s+)?(focus(es)?|priorities|topics|watches)/.test(lower)) {
+    return { action: "clear" };
+  }
+
+  // PUBLISH patterns (can post/comment) - check these FIRST since "look for and publish" contains "look for"
+  const publishPatterns = [
+    /^look\s+for\s+and\s+publish\s+(?:about\s+)?[""]?(.+?)[""]?$/i,
+    /^publish\s+about\s+[""]?(.+?)[""]?$/i,
+    /^focus\s+on\s+[""]?(.+?)[""]?$/i,
+    /^prioritize\s+[""]?(.+?)[""]?(?:\s+content)?$/i,
+  ];
+
+  for (const pattern of publishPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return { action: "publish", target: match[1].trim() };
+    }
+  }
+
+  // WATCH patterns (observe only, no posting/commenting)
+  const watchPatterns = [
+    /^look\s+for\s+(?:posts?\s+)?(?:about\s+)?[""]?(.+?)[""]?$/i,
+    /^watch\s+(?:for\s+)?[""]?(.+?)[""]?$/i,
+    /^seek\s+(?:out\s+)?[""]?(.+?)[""]?$/i,
+    /^track\s+[""]?(.+?)[""]?$/i,
+  ];
+
+  for (const pattern of watchPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return { action: "watch", target: match[1].trim() };
+    }
+  }
+
+  // Unfocus patterns
+  const unfocusPatterns = [
+    /^(?:clear|remove|drop)\s+(?:focus|watch)\s+(?:on\s+)?[""]?(.+?)[""]?$/i,
+    /^unfocus\s+[""]?(.+?)[""]?$/i,
+    /^unwatch\s+[""]?(.+?)[""]?$/i,
+    /^stop\s+(?:looking\s+for|focusing\s+on|prioritizing|watching)\s+[""]?(.+?)[""]?$/i,
+  ];
+
+  for (const pattern of unfocusPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return { action: "unfocus", target: match[1].trim() };
     }
   }
 
@@ -1305,6 +1391,75 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       }
     }
 
+    // Check for focus/priority instructions
+    const focusCmd = parseFocusInstruction(text);
+    if (focusCmd) {
+      switch (focusCmd.action) {
+        case "list": {
+          const priorities = getPrioritizedTopics();
+          const watches = getWatchedTopics();
+          if (priorities.length === 0 && watches.length === 0) {
+            await message.reply({ content: "No focus topics set. I'll engage with whatever seems interesting." });
+          } else {
+            const lines: string[] = [];
+            if (priorities.length > 0) {
+              lines.push("**Publish Topics** (I'll seek AND post/comment about these):");
+              for (const p of priorities) {
+                lines.push(`• "${p.topic}"${p.reason ? ` — ${p.reason}` : ""}`);
+              }
+            }
+            if (watches.length > 0) {
+              if (lines.length > 0) lines.push("");
+              lines.push("**Watch Topics** (observe only, no publishing):");
+              for (const w of watches) {
+                lines.push(`• "${w.topic}"${w.reason ? ` — ${w.reason}` : ""}`);
+              }
+            }
+            await message.reply({ content: lines.join("\n") });
+          }
+          console.log(`discord: listed focuses from msg=${message.id}`);
+          return;
+        }
+        case "clear": {
+          clearPrioritizedTopics();
+          await message.reply({ content: "✅ Cleared all focus/watch topics. I'll go back to engaging with whatever seems interesting." });
+          console.log(`discord: cleared all focuses from msg=${message.id}`);
+          return;
+        }
+        case "publish": {
+          if (focusCmd.target) {
+            // Remove any existing watch for the same topic (upgrade to publish)
+            removeOperatorInstruction("watch_topic", focusCmd.target);
+            addOperatorInstruction("prioritize_topic", focusCmd.target, `Publish focus set by operator via Discord`);
+            await message.reply({ content: `🎯 Got it — I'll actively look for AND publish about "${focusCmd.target}".` });
+            console.log(`discord: added publish focus "${focusCmd.target}" from msg=${message.id}`);
+          }
+          return;
+        }
+        case "watch": {
+          if (focusCmd.target) {
+            addOperatorInstruction("watch_topic", focusCmd.target, `Watch set by operator via Discord (observe only)`);
+            await message.reply({ content: `👀 Got it — I'll look for "${focusCmd.target}" and add observations, but won't publish about it.` });
+            console.log(`discord: added watch "${focusCmd.target}" from msg=${message.id}`);
+          }
+          return;
+        }
+        case "unfocus": {
+          if (focusCmd.target) {
+            const removedPriority = removeOperatorInstruction("prioritize_topic", focusCmd.target);
+            const removedWatch = removeOperatorInstruction("watch_topic", focusCmd.target);
+            if (removedPriority || removedWatch) {
+              await message.reply({ content: `✅ Removed "${focusCmd.target}" from my focus/watch list.` });
+            } else {
+              await message.reply({ content: `"${focusCmd.target}" wasn't in my focus or watch list.` });
+            }
+            console.log(`discord: removed focus/watch "${focusCmd.target}" from msg=${message.id}`);
+          }
+          return;
+        }
+      }
+    }
+
     // Check for autonomous mode commands
     const autoCmd = parseAutonomousCommand(text);
     if (autoCmd) {
@@ -1439,16 +1594,24 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       return;
     }
 
-    // Build full context including state, browse memory, and observations
-    const stateContext = buildStateContext();
-    const browseContext = getBrowseContext();
-    const observationsContext = getObservationsContext();
-    const fullContext = [
-      stateContext,
-      context || "",
-      browseContext !== "No recent Moltbook browse recorded." ? browseContext : "",
-      observationsContext,
-    ].filter(Boolean).join("\n\n");
+    // Build context - but DON'T inject full memory dump for casual conversation
+    // Only inject state/browse/observations if the message seems Moltbook-related
+    const isMoltbookRelated = /moltbook|post|thread|comment|browse|feed|submolt|autonomous|status/i.test(text);
+
+    let fullContext = context || "";
+    if (isMoltbookRelated) {
+      // Include full context for Moltbook-related queries
+      const stateContext = buildStateContext();
+      const browseContext = getBrowseContext();
+      const observationsContext = getObservationsContext();
+      fullContext = [
+        stateContext,
+        context || "",
+        browseContext !== "No recent Moltbook browse recorded." ? browseContext : "",
+        observationsContext,
+      ].filter(Boolean).join("\n\n");
+    }
+    // For casual chat, just use the Discord conversation context (no memory injection)
 
     // Generate response (use Discord personality for operator chat)
     const result = await generate({

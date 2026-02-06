@@ -36,9 +36,9 @@ export interface KarmaSnapshot {
 }
 
 export interface OperatorInstruction {
-  type: "block_post" | "block_topic";
+  type: "block_post" | "block_topic" | "prioritize_topic" | "watch_topic";
   value: string;          // Post ID, post title substring, or topic keyword
-  reason?: string;        // Why the operator blocked it
+  reason?: string;        // Why the operator set this directive
   addedAt: string;        // ISO timestamp
   expiresAt?: string;     // Optional expiration (ISO timestamp)
 }
@@ -565,4 +565,37 @@ export function clearOperatorInstructions(): void {
   state.operatorInstructions = [];
   writeState(state);
   console.log("state: cleared all operator instructions");
+}
+
+/**
+ * Get prioritized topics from operator instructions (publish allowed).
+ */
+export function getPrioritizedTopics(): { topic: string; reason?: string }[] {
+  const instructions = getOperatorInstructions();
+  return instructions
+    .filter((i) => i.type === "prioritize_topic")
+    .map((i) => ({ topic: i.value, reason: i.reason }));
+}
+
+/**
+ * Get watched topics from operator instructions (observe only, no publishing).
+ */
+export function getWatchedTopics(): { topic: string; reason?: string }[] {
+  const instructions = getOperatorInstructions();
+  return instructions
+    .filter((i) => i.type === "watch_topic")
+    .map((i) => ({ topic: i.value, reason: i.reason }));
+}
+
+/**
+ * Clear only prioritize_topic and watch_topic instructions (keep blocks).
+ */
+export function clearPrioritizedTopics(): void {
+  const state = readState();
+  if (!state.operatorInstructions) return;
+  state.operatorInstructions = state.operatorInstructions.filter(
+    (i) => i.type !== "prioritize_topic" && i.type !== "watch_topic"
+  );
+  writeState(state);
+  console.log("state: cleared all prioritized/watched topics");
 }

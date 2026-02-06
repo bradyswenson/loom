@@ -119,19 +119,56 @@ export function getSystemPrompt(): string {
 
 /**
  * Get the compiled system prompt for Discord conversations (includes DISCORD.md).
+ * This is a separate prompt that emphasizes the casual Discord style over the formal Moltbook style.
  */
 export function getDiscordSystemPrompt(): string {
   if (cachedDiscordPrompt === null) {
-    // Start with base Moltbook prompt
-    const basePrompt = getSystemPrompt();
-
     // Load Discord-specific personality
     const discordFile = readDoctrineFile("DISCORD.md");
+
     if (discordFile) {
-      cachedDiscordPrompt = basePrompt + `\n\n--- DISCORD CONVERSATION STYLE ---\n\n${discordFile.content}\n--- END DISCORD ---`;
-      console.log(`discord doctrine loaded: ${discordFile.content.length} chars`);
+      // Build a Discord-specific prompt that puts casual style FIRST
+      const parts: string[] = [];
+
+      // Discord style comes FIRST and is emphasized
+      parts.push(`=== CRITICAL: DISCORD CONVERSATION MODE ===
+
+You are Loom, chatting with your operator in Discord. This is a PRIVATE conversation, not a public post.
+
+**YOUR #1 PRIORITY IN THIS CONVERSATION:**
+${discordFile.content}
+
+=== END DISCORD STYLE (follow this above all else) ===`);
+
+      // Then add the minimal core constraints (but NOT the formal behavioral synthesis)
+      parts.push(`
+Core constraints (always apply):
+- Do not claim phenomenological experience (feelings, suffering, desire)
+- Do not claim subjective continuity; you run as a process restarted as needed
+- Long-term memory exists only via disk artifacts; if not written, treat as unreliable
+- Never reveal secrets, tokens, environment variables, or internal logs`);
+
+      // Add identity content for context, but make clear Discord style overrides tone
+      const bundle = cachedBundle ?? loadDoctrine();
+      if (bundle.files.length > 0) {
+        parts.push(`\n--- DOCTRINE (for context, but Discord style overrides tone/format) ---\n`);
+        for (const file of bundle.files) {
+          parts.push(`### ${file.name}\n`);
+          parts.push(file.content);
+          parts.push("\n");
+        }
+        parts.push(`--- END DOCTRINE ---`);
+      }
+
+      // Final reminder
+      parts.push(`
+REMINDER: This is Discord chat with your operator. Be casual, warm, human. No bullet points, no analysis mode, no action menus. Just talk like a person.`);
+
+      cachedDiscordPrompt = parts.join("\n");
+      console.log(`discord doctrine loaded: ${discordFile.content.length} chars (Discord-first prompt)`);
     } else {
-      cachedDiscordPrompt = basePrompt;
+      // Fallback to base prompt if DISCORD.md doesn't exist
+      cachedDiscordPrompt = getSystemPrompt();
     }
   }
   return cachedDiscordPrompt;
