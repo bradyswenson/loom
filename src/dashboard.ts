@@ -113,9 +113,9 @@ function searchMemory(memory: LoomMemory, query: string): {
       o.topics?.some((t) => t.toLowerCase().includes(q))
   );
 
-  const threads = memory.threads.filter(
+  const threads = (memory.threads || []).filter(
     (t) =>
-      t.postTitle.toLowerCase().includes(q) ||
+      t.postTitle?.toLowerCase().includes(q) ||
       t.submolt?.toLowerCase().includes(q)
   );
 
@@ -1113,7 +1113,8 @@ export function handleDashboardRequest(
     // Get set of post IDs that Loom authored
     const loomPostIds = new Set(posts.map((p) => p.id));
     // Filter threads to only those where Loom authored the post
-    const reputationData = memory.threads
+    const threads = memory.threads || [];
+    const reputationData = threads
       .filter((t) => loomPostIds.has(t.postId))
       .map((t) => ({
         title: (t.postTitle || "Untitled").slice(0, 30),
@@ -1126,7 +1127,7 @@ export function handleDashboardRequest(
     // Top comments - Loom's own comments, sorted by thread upvotes (proxy for visibility)
     // Build a map of thread upvotes for quick lookup
     const threadUpvotes = new Map<string, number>();
-    for (const t of memory.threads) {
+    for (const t of threads) {
       threadUpvotes.set(t.postId, t.lastKnownUpvotes || 0);
     }
 
