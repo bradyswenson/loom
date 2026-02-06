@@ -36,7 +36,7 @@ export interface ThreadEntry {
   ourCommentIds: string[];       // IDs of comments we made
   lastKnownCommentCount: number;
   lastKnownUpvotes: number;
-  isOurPost: boolean;            // True if Loom created the post, false if just commented
+  isOurPost?: boolean;           // True if Loom created the post, false if just commented (optional for backwards compat)
 }
 
 export interface SeenPost {

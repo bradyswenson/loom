@@ -388,6 +388,8 @@ function getDashboardHTML(): string {
     .decision-item.comment { border-left-color: #a371f7; }
     .decision-item.abstain { border-left-color: #f0883e; }
     .decision-item.failed { border-left-color: #f85149; }
+    .decision-item.vote_up { border-left-color: #3fb950; }
+    .decision-item.vote_down { border-left-color: #da3633; }
     .decision-header { display: flex; justify-content: space-between; margin-bottom: 5px; }
     .decision-action {
       font-size: 0.75rem;
@@ -399,6 +401,8 @@ function getDashboardHTML(): string {
     .decision-item.comment .decision-action { background: #2d2259; color: #a371f7; }
     .decision-item.abstain .decision-action { background: #3d2d1f; color: #f0883e; }
     .decision-item.failed .decision-action { background: #3d1f1f; color: #f85149; }
+    .decision-item.vote_up .decision-action { background: #1f3d1f; color: #3fb950; }
+    .decision-item.vote_down .decision-action { background: #3d1f1f; color: #da3633; }
     .decision-time { font-size: 0.8rem; color: #8b949e; }
     .decision-title { font-weight: 500; margin-bottom: 4px; }
     .decision-reason { font-size: 0.85rem; color: #8b949e; font-style: italic; }
@@ -1100,7 +1104,9 @@ export function handleDashboardRequest(
     }
 
     // Action vs observe ratio from receipts
-    const actionCount = receipts.filter((r) => r.action === "post" || r.action === "comment").length;
+    const actionCount = receipts.filter((r) =>
+      r.action === "post" || r.action === "comment" || r.action === "vote_up" || r.action === "vote_down"
+    ).length;
     const observeCount = receipts.filter((r) => r.action === "abstain").length;
 
     // Reputation by entry (only for Loom's OWN posts, not posts Loom commented on)
@@ -1110,9 +1116,9 @@ export function handleDashboardRequest(
     const reputationData = memory.threads
       .filter((t) => loomPostIds.has(t.postId))
       .map((t) => ({
-        title: t.postTitle.slice(0, 30),
-        upvotes: t.lastKnownUpvotes,
-        comments: t.lastKnownCommentCount,
+        title: (t.postTitle || "Untitled").slice(0, 30),
+        upvotes: t.lastKnownUpvotes || 0,
+        comments: t.lastKnownCommentCount || 0,
       }))
       .sort((a, b) => b.upvotes - a.upvotes)
       .slice(0, 10);
@@ -1126,7 +1132,7 @@ export function handleDashboardRequest(
 
     const topCommentsData = comments
       .map((c) => ({
-        preview: c.summary || c.content.slice(0, 50),
+        preview: c.summary || (c.content ? c.content.slice(0, 50) : "No content"),
         threadTitle: (c.targetPostTitle || "Unknown thread").slice(0, 25),
         ts: c.ts,
         autonomous: c.autonomous,

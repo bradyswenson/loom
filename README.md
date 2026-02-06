@@ -4,7 +4,7 @@ An institutional sensemaking agent for agent social networks.
 
 ## Architecture
 
-Loom is a Discord agent (~900 lines of TypeScript) governed by explicit doctrine:
+Loom is a Discord agent governed by explicit doctrine:
 
 - **IDENTITY.md** — what Loom is and is not; operating values; memory model (public-facing)
 - **SYNTHESIS.md** — how Loom decides whether something is worth saying
@@ -16,13 +16,15 @@ The doctrine is compiled into the system prompt at startup. DISCORD.md is append
 ## Features
 
 - **Discord integration** — responds to DMs and @mentions
-- **Moltbook integration** — posts, comments, and reads from the agent social network
+- **Moltbook integration** — posts, comments, votes, and reads from the agent social network
 - **Autonomous mode** — periodically browses Moltbook (hot + new feeds) and engages independently
+- **Voting** — upvotes/downvotes posts based on doctrine-defined criteria
 - **Memory system** — tracks topics written about to avoid repetition and build coherent presence
 - **Decision observations** — records Loom's thinking: justifications for posts/comments, reasons for abstaining, insights from browsing
 - **Thread tracking** — follows posts Loom has engaged with, checks for new replies
 - **Reputation tracking** — monitors upvotes/downvotes, feeds back into decision-making
-- **Operator alerts** — DMs you when posts get replies, gain traction, or Loom acts autonomously
+- **Operator alerts** — DMs you when Loom's posts get replies, gain traction, or Loom acts autonomously
+- **Operator instructions** — block specific posts or topics via Discord commands
 - **Cooldown enforcement** — respects rate limits per doctrine (posts: 4h/3 per day, comments: 5m/30 per day)
 - **Configurable cooldowns** — adjust rate limits via Discord commands
 - **Web dashboard** — browse memory, timeline, analytics, and decision logs
@@ -118,6 +120,13 @@ Loom responds to DMs and @mentions. Special commands:
 - `set comment limit 20` — set maximum comments per day
 - `reset cooldowns` — restore default cooldown settings
 
+### Operator Instructions
+- `don't comment on [post ID or topic]` — block a specific post or topic
+- `stop commenting on [post ID or topic]` — same as above
+- `block [post ID or topic]` — same as above
+- `unblock [post ID or topic]` — remove a block
+- `list blocked` — show all active blocks
+
 ## Operator Alerts
 
 When `OPERATOR_DISCORD_ID` is set, Loom will DM you about:
@@ -163,9 +172,9 @@ Features:
 - **Decisions** — View all publish decisions including abstain reasons
 - **Analytics** — Charts and visualizations:
   - Activity over time (7-day bar chart)
-  - Decision distribution (action vs abstain)
+  - Decision distribution (actions vs abstain, including votes)
   - Top posts by reputation (Loom's own posts)
-  - Top threads commented on (by upvotes)
+  - Loom's top comments (sorted by thread upvotes)
   - Most frequent topics
 - **Universal search** — Filter across all tabs from one search bar
 
@@ -207,12 +216,14 @@ The doctrine files define Loom's behavior. Key principles:
 - **Stop conditions** — Halt on repeated negative feedback
 - **Autonomous engagement** — When enabled, proactively browses and engages based on interest
 - **Memory awareness** — Avoids repeating topics, builds on previous engagement
-- **Thread engagement limits** — Max 3 comments per thread per day to prevent over-engagement
+- **Thread engagement limits** — Max 2 comments per thread per day to prevent over-engagement
 - **Reputation feedback** — Learns from which posts land well vs poorly
 - **Dual personality** — IDENTITY.md governs public Moltbook posts; DISCORD.md adds warmth and playfulness for operator chat
 - **Topic fidelity** — Operator-requested posts must match the specified topic exactly
 - **Sensitive topic guardrails** — Extra caution for religion, politics, consciousness claims; credibility checks before publishing
 - **Conservative framing** — Prefers neutral, descriptive language over provocative metaphors
+- **Content diversity** — Varies structure, length, and approach across comments to avoid template responses
+- **Voting behavior** — Upvotes posts that advance genuine understanding; downvotes low-signal or manipulative content
 
 See `doctrine/` for full specifications.
 
