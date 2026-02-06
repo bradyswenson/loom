@@ -280,6 +280,7 @@ function formatCommandsHelp(): string {
 📝 **Moltbook**
 • \`post to moltbook about [topic]\` — create a new post
 • \`read post [id]\` — fetch and display a post
+• \`comment on [url]\` — comment on a specific post by URL
 
 🌐 **Dashboard**
 • Visit https://loom-v3.fly.dev/dashboard for the web UI
@@ -819,6 +820,154 @@ async function handleReadPost(message: Message, postId: string): Promise<void> {
 
   await message.reply({ content: lines.join("\n").slice(0, MAX_REPLY_LENGTH) });
   console.log(`discord: fetched post ${postId} for msg=${message.id}`);
+}
+
+/**
+ * Check if message is a request to comment on a specific Moltbook post.
+ * Returns the post ID and optional guidance if found.
+ */
+function extractCommentOnPostRequest(text: string): { postId: string; guidance?: string } | null {
+  // Match patterns like:
+  // - "comment on https://www.moltbook.com/post/abc123"
+  // - "reply to https://www.moltbook.com/post/abc123"
+  // - "comment on post abc123"
+  // - "comment on https://... about X" (with guidance)
+
+  const urlPattern = /(?:comment|reply|respond)\s+(?:on|to)\s+(?:this\s+)?(?:post\s+)?https?:\/\/(?:www\.)?moltbook\.com\/post\/([a-f0-9-]+)/i;
+  const idPattern = /(?:comment|reply|respond)\s+(?:on|to)\s+(?:this\s+)?post\s+([a-f0-9-]{8,})/i;
+
+  let postId: string | null = null;
+  let matchEnd = 0;
+
+  const urlMatch = text.match(urlPattern);
+  if (urlMatch) {
+    postId = urlMatch[1];
+    matchEnd = urlMatch.index! + urlMatch[0].length;
+  } else {
+    const idMatch = text.match(idPattern);
+    if (idMatch) {
+      postId = idMatch[1];
+      matchEnd = idMatch.index! + idMatch[0].length;
+    }
+  }
+
+  if (!postId) return null;
+
+  // Extract optional guidance after the URL/ID
+  const remaining = text.slice(matchEnd).trim();
+  const guidanceMatch = remaining.match(/^(?:about|regarding|re:|on|with)?\s*(.+)/i);
+  const guidance = guidanceMatch?.[1]?.trim() || undefined;
+
+  return { postId, guidance };
+}
+
+/**
+ * Handle a request to comment on a specific Moltbook post.
+ */
+async function handleCommentOnPost(message: Message, postId: string, guidance?: string): Promise<void> {
+  if (!moltbookConfigured()) {
+    await message.reply({ content: "Moltbook is not configured. Set MOLTBOOK_API_KEY to enable." });
+    return;
+  }
+
+  // Check comment cooldown
+  const commentCooldown = checkCommentCooldown();
+  if (!commentCooldown.allowed) {
+    await message.reply({ content: `Can't comment right now: ${commentCooldown.reason}` });
+    return;
+  }
+
+  // Fetch the post
+  await message.reply({ content: "fetching post..." });
+  const result = await getPost(postId);
+
+  if (!result.ok || !result.post) {
+    await message.reply({ content: `couldn't fetch post: ${result.error || "not found"}` });
+    return;
+  }
+
+  const post = result.post;
+
+  // Fetch existing comments for context
+  const commentsResult = await getComments(postId, "top");
+  const existingComments = commentsResult.ok && commentsResult.comments?.length
+    ? commentsResult.comments.slice(0, 5).map(c => `${c.author}: ${c.content.slice(0, 200)}`).join("\n\n")
+    : "(no comments yet)";
+
+  // Build prompt for generating comment
+  const prompt = `Your operator has asked you to comment on this Moltbook post.
+
+POST:
+Title: "${post.title}"
+Author: ${post.author}
+Submolt: ${post.submolt || "general"}
+Content: ${post.content || post.url || "(no content)"}
+
+EXISTING COMMENTS:
+${existingComments}
+
+${guidance ? `OPERATOR GUIDANCE: ${guidance}` : ""}
+
+Write a thoughtful comment that adds value to this discussion. Be genuine, not performative. Follow your doctrine.
+
+Respond with ONLY your comment text (no formatting, no "COMMENT:" prefix, just the comment itself).`;
+
+  const llmResult = await generate({ userMessage: prompt, maxTokens: 800 });
+  const commentContent = llmResult.text.trim();
+
+  if (!commentContent || commentContent.length < 10) {
+    await message.reply({ content: "couldn't generate a good comment for this post" });
+    return;
+  }
+
+  // Post the comment
+  const commentResult = await createComment({
+    postId,
+    content: commentContent,
+  });
+
+  if (!commentResult.ok) {
+    appendReceipt({
+      ts: new Date().toISOString(),
+      action: "comment",
+      surface: "moltbook",
+      targetPostId: postId,
+      contentPreview: commentContent.slice(0, 100),
+      success: false,
+      error: commentResult.error,
+    });
+    await message.reply({ content: `failed to comment: ${commentResult.error}` });
+    return;
+  }
+
+  // Record success
+  recordCommentState();
+  const commentId = commentResult.comment?.id || `comment-${Date.now()}`;
+  await recordCommentMemory(
+    commentId,
+    commentContent,
+    postId,
+    post.title,
+    post.submolt,
+    false
+  );
+
+  appendReceipt({
+    ts: new Date().toISOString(),
+    action: "comment",
+    surface: "moltbook",
+    commentId,
+    targetPostId: postId,
+    contentPreview: commentContent.slice(0, 100),
+    success: true,
+  });
+
+  const postUrl = `https://www.moltbook.com/post/${postId}`;
+  console.log(`discord: commented on post=${postId} via operator request`);
+
+  await message.reply({
+    content: `commented on "${post.title}":\n\n${commentContent.slice(0, 500)}${commentContent.length > 500 ? "..." : ""}\n\n${postUrl}`
+  });
 }
 
 /**
@@ -1579,6 +1728,13 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
     const readPostId = extractReadPostRequest(text);
     if (readPostId) {
       await handleReadPost(message, readPostId);
+      return;
+    }
+
+    // Check for comment-on-post request
+    const commentRequest = extractCommentOnPostRequest(text);
+    if (commentRequest) {
+      await handleCommentOnPost(message, commentRequest.postId, commentRequest.guidance);
       return;
     }
 
