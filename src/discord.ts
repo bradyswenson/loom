@@ -5,7 +5,7 @@
 
 import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder } from "discord.js";
 import { generate } from "./llm.js";
-import { createPost, createComment, getFeed, getPost, getComments, getSubmolts, isConfigured as moltbookConfigured, type MoltbookPost } from "./moltbook.js";
+import { createPost, createComment, getFeed, getPost, getComments, getSubmolts, validateSubmolt, isConfigured as moltbookConfigured, type MoltbookPost } from "./moltbook.js";
 import {
   checkPostCooldown,
   checkCommentCooldown,
@@ -1008,7 +1008,8 @@ REASON: [brief reason]`;
     return;
   }
 
-  const submolt = submoltMatch?.[1]?.trim() || "general";
+  // Validate submolt exists (LLM sometimes hallucinates submolt names)
+  const submolt = await validateSubmolt(submoltMatch?.[1]?.trim());
   const title = titleMatch[1].trim();
   const content = contentMatch[1].trim();
 

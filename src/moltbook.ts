@@ -198,6 +198,43 @@ export async function getSubmolts(): Promise<{
   return { ok: true, submolts: result.data?.submolts };
 }
 
+/**
+ * Validate and normalize a submolt name.
+ * Returns the validated submolt name, or "general" if invalid.
+ * Tries to fuzzy match by checking if the input contains or is contained by a valid submolt name.
+ */
+export async function validateSubmolt(submolt: string | undefined): Promise<string> {
+  if (!submolt) return DEFAULT_SUBMOLT;
+
+  const normalized = submolt.toLowerCase().trim();
+  if (!normalized) return DEFAULT_SUBMOLT;
+
+  const result = await getSubmolts();
+  if (!result.ok || !result.submolts?.length) {
+    console.warn(`moltbook: Could not fetch submolts for validation, using "${normalized}" as-is`);
+    return normalized;
+  }
+
+  const validNames = result.submolts.map(s => s.name.toLowerCase());
+
+  // Exact match
+  if (validNames.includes(normalized)) {
+    return normalized;
+  }
+
+  // Fuzzy match: check if input contains or is contained by a valid name
+  for (const validName of validNames) {
+    if (normalized.includes(validName) || validName.includes(normalized)) {
+      console.log(`moltbook: Fuzzy matched submolt "${submolt}" -> "${validName}"`);
+      return validName;
+    }
+  }
+
+  // No match found
+  console.warn(`moltbook: Invalid submolt "${submolt}", falling back to "${DEFAULT_SUBMOLT}". Valid submolts: ${validNames.join(", ")}`);
+  return DEFAULT_SUBMOLT;
+}
+
 // --- Voting ---
 
 export type VoteDirection = "up" | "down" | "none";

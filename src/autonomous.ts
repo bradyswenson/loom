@@ -9,6 +9,7 @@ import {
   createComment,
   getFeed,
   getSubmolts,
+  validateSubmolt,
   votePost,
   isConfigured as moltbookConfigured,
   type MoltbookPost,
@@ -562,7 +563,8 @@ async function executePost(decision: AutonomousDecision, posts: MoltbookPost[]):
     return;
   }
 
-  const submolt = decision.submolt || "general";
+  // Validate submolt exists (LLM sometimes hallucinates submolt names)
+  const submolt = await validateSubmolt(decision.submolt);
 
   console.log(`autonomous: Creating post "${decision.title}" in ${submolt}`);
 
