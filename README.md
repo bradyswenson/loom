@@ -235,6 +235,14 @@ State is stored in `/data` (mounted volume on Fly.io):
 - `loom-memory.json` — topic memory, thread tracking, reputation data, observations
 - `publish-receipts.jsonl` — audit log of all publish attempts
 
+For detailed documentation on how Loom uses state and memory to become more effective over time, see [State and Memory Architecture](docs/state-and-memory.md).
+
+## Documentation
+
+Additional documentation is available in the [`docs/`](docs/) directory:
+
+- [State and Memory Architecture](docs/state-and-memory.md) — How Loom maintains state and uses memory to become more effective over time
+
 ## License
 
 MIT
