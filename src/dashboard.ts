@@ -4,7 +4,7 @@
  */
 
 import http from "http";
-import { readMemory, getMemoryStats, getReputationStats, type LoomMemory } from "./memory.js";
+import { readMemory, getMemoryStats, getReputationStats, getEnhancedMemoryStats, getActiveGoals, type LoomMemory, type Goal } from "./memory.js";
 import { getStateStatus, getRecentReceipts } from "./state.js";
 import { getAutonomousStatus } from "./autonomous.js";
 import { getDoctrineMetadata } from "./doctrine.js";
@@ -426,6 +426,7 @@ function getDashboardHTML(): string {
       <button class="tab" data-tab="memory">Memory</button>
       <button class="tab" data-tab="threads">Threads</button>
       <button class="tab" data-tab="observations">Observations</button>
+      <button class="tab" data-tab="goals">Goals</button>
       <button class="tab" data-tab="decisions">Decisions</button>
       <button class="tab" data-tab="analytics">Analytics</button>
     </div>
@@ -442,6 +443,9 @@ function getDashboardHTML(): string {
       </div>
       <div class="panel" id="observations-panel">
         <div class="loading">Loading observations...</div>
+      </div>
+      <div class="panel" id="goals-panel">
+        <div class="loading">Loading goals...</div>
       </div>
       <div class="panel" id="decisions-panel">
         <div class="loading">Loading decisions...</div>
@@ -657,6 +661,105 @@ function getDashboardHTML(): string {
       if (e.key === 'Escape') closeModal();
     });
 
+    // Render goals
+    async function renderGoals() {
+      const panel = document.getElementById('goals-panel');
+      try {
+        const res = await fetch('/api/goals');
+        if (!res.ok) throw new Error('Failed to fetch goals');
+        const data = await res.json();
+
+        if (!data.goals || data.goals.length === 0) {
+          let html = '<div class="empty">No goals tracked yet</div>';
+          // Show memory stats anyway
+          if (data.stats) {
+            html += '<div class="chart-container" style="margin-top: 20px;">';
+            html += '<div class="chart-title">Memory System Stats</div>';
+            html += '<div class="stats-grid">';
+            html += \`<div class="stat-card"><div class="stat-value">\${data.stats.entries}</div><div class="stat-label">Memory Entries</div></div>\`;
+            html += \`<div class="stat-card"><div class="stat-value">\${data.stats.compressedInsights}</div><div class="stat-label">Compressed Periods</div></div>\`;
+            html += \`<div class="stat-card"><div class="stat-value">\${data.stats.embeddings}</div><div class="stat-label">Semantic Index</div></div>\`;
+            html += \`<div class="stat-card"><div class="stat-value">\${data.stats.observations}</div><div class="stat-label">Observations</div></div>\`;
+            html += '</div></div>';
+          }
+          panel.innerHTML = html;
+          return;
+        }
+
+        let html = '';
+
+        // Active goals
+        const active = data.goals.filter(g => g.status === 'active');
+        const completed = data.goals.filter(g => g.status !== 'active');
+
+        if (active.length > 0) {
+          html += '<h3 style="color: #58a6ff; margin-bottom: 15px;">Active Goals</h3>';
+          for (const goal of active) {
+            const typeIcon = goal.type === 'topic' ? '📚' : goal.type === 'engagement' ? '💬' : goal.type === 'relationship' ? '🤝' : '🧠';
+            html += \`<div class="timeline-item">
+              <div class="timeline-header">
+                <span class="timeline-type type-post">\${typeIcon} \${goal.type}</span>
+                <span class="timeline-date">\${formatDate(goal.createdAt)}</span>
+              </div>
+              <div class="timeline-title">\${escapeHtml(goal.description)}</div>
+              \${goal.targetDate ? \`<div class="timeline-meta">Target: \${goal.targetDate}</div>\` : ''}
+              \${goal.progress.length > 0 ? \`<div class="timeline-content" style="margin-top: 8px; font-size: 0.85rem; color: #8b949e;">Latest: \${escapeHtml(goal.progress[goal.progress.length - 1])}</div>\` : ''}
+            </div>\`;
+          }
+        }
+
+        if (completed.length > 0) {
+          html += '<h3 style="color: #8b949e; margin: 25px 0 15px 0;">Completed/Abandoned</h3>';
+          for (const goal of completed.slice(-5)) {
+            const statusIcon = goal.status === 'completed' ? '✅' : '❌';
+            html += \`<div class="timeline-item" style="opacity: 0.7;">
+              <div class="timeline-header">
+                <span class="timeline-type type-observation">\${statusIcon} \${goal.type}</span>
+                <span class="timeline-date">\${formatDate(goal.completedAt || goal.createdAt)}</span>
+              </div>
+              <div class="timeline-title">\${escapeHtml(goal.description)}</div>
+              \${goal.outcome ? \`<div class="timeline-content" style="margin-top: 8px; font-size: 0.85rem;">\${escapeHtml(goal.outcome)}</div>\` : ''}
+            </div>\`;
+          }
+        }
+
+        // Memory stats
+        if (data.stats) {
+          html += '<div class="chart-container" style="margin-top: 25px;">';
+          html += '<div class="chart-title">Memory System Stats</div>';
+          html += '<div class="stats-grid">';
+          html += \`<div class="stat-card"><div class="stat-value">\${data.stats.entries}</div><div class="stat-label">Memory Entries</div></div>\`;
+          html += \`<div class="stat-card"><div class="stat-value">\${data.stats.compressedInsights}</div><div class="stat-label">Compressed Periods</div></div>\`;
+          html += \`<div class="stat-card"><div class="stat-value">\${data.stats.embeddings}</div><div class="stat-label">Semantic Index</div></div>\`;
+          html += \`<div class="stat-card"><div class="stat-value">\${data.stats.observations}</div><div class="stat-label">Observations</div></div>\`;
+          html += '</div>';
+          if (data.stats.lastCompression) {
+            html += \`<div style="text-align: center; color: #8b949e; font-size: 0.85rem; margin-top: 10px;">Last compression: \${formatDate(data.stats.lastCompression)}</div>\`;
+          }
+          html += '</div>';
+        }
+
+        // Compressed insights preview
+        if (data.insights && data.insights.length > 0) {
+          html += '<div class="chart-container" style="margin-top: 20px;">';
+          html += '<div class="chart-title">Historical Memory (Compressed)</div>';
+          for (const insight of data.insights.slice(-4)) {
+            html += \`<div style="padding: 10px; border-bottom: 1px solid #30363d;">
+              <div style="color: #58a6ff; font-weight: 500;">\${insight.period}</div>
+              <div style="color: #8b949e; font-size: 0.85rem;">\${insight.performanceSummary} | Topics: \${insight.topicCluster.join(', ') || 'none'}</div>
+              \${insight.keyInsights.length > 0 ? \`<div style="margin-top: 5px; font-size: 0.85rem;">\${escapeHtml(insight.keyInsights[0].slice(0, 150))}...</div>\` : ''}
+            </div>\`;
+          }
+          html += '</div>';
+        }
+
+        panel.innerHTML = html;
+      } catch (err) {
+        console.error('Failed to load goals:', err);
+        panel.innerHTML = '<div class="empty">Failed to load goals</div>';
+      }
+    }
+
     // Render analytics
     async function renderAnalytics() {
       const panel = document.getElementById('analytics-panel');
@@ -851,6 +954,9 @@ function getDashboardHTML(): string {
 
       try {
         const res = await fetch('/api/search?q=' + encodeURIComponent(query));
+        if (!res.ok) {
+          throw new Error('Search failed: ' + res.status);
+        }
         const data = await res.json();
 
         // Combine search results for timeline view
@@ -911,6 +1017,11 @@ function getDashboardHTML(): string {
         const analyticsPanel = document.getElementById('analytics-panel');
         analyticsPanel.innerHTML = banner + analyticsPanel.innerHTML;
 
+        // Goals - no filtering, just show banner
+        renderGoals();
+        const goalsPanel = document.getElementById('goals-panel');
+        goalsPanel.innerHTML = banner + goalsPanel.innerHTML;
+
       } catch (err) {
         console.error('Search failed:', err);
         document.getElementById('timeline-panel').innerHTML = '<div class="empty">Search failed</div>';
@@ -965,8 +1076,9 @@ function getDashboardHTML(): string {
         const timeline = await timelineRes.json();
         renderTimeline(timeline.events, memory.entries);
 
-        // Load analytics and decisions
+        // Load analytics, goals, and decisions
         renderAnalytics();
+        renderGoals();
         renderDecisions();
       } catch (err) {
         console.error('Failed to load data:', err);
@@ -1026,10 +1138,16 @@ export function handleDashboardRequest(
       res.end(JSON.stringify({ error: "Missing query parameter 'q'" }));
       return true;
     }
-    const memory = readMemory();
-    const results = searchMemory(memory, query);
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(results));
+    try {
+      const memory = readMemory();
+      const results = searchMemory(memory, query);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(results));
+    } catch (err) {
+      console.error("dashboard: search error", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Search failed", posts: [], comments: [], observations: [], threads: [] }));
+    }
     return true;
   }
 
@@ -1050,6 +1168,23 @@ export function handleDashboardRequest(
     const receipts = getRecentReceipts(limit);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ receipts }));
+    return true;
+  }
+
+  // API: Goals and memory stats
+  if (url.pathname === "/api/goals") {
+    try {
+      const memory = readMemory();
+      const stats = getEnhancedMemoryStats();
+      const goals = memory.goals || [];
+      const insights = memory.compressedInsights || [];
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ goals, stats, insights }));
+    } catch (err) {
+      console.error("dashboard: goals error", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Failed to load goals", goals: [], stats: null, insights: [] }));
+    }
     return true;
   }
 
