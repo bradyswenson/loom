@@ -734,7 +734,7 @@ function getDashboardHTML(): string {
         // Loom's top comments (by thread engagement)
         if (data.topCommentsData && data.topCommentsData.length > 0) {
           html += '<div class="chart-container">';
-          html += '<div class="chart-title">Loom\'s Top Comments</div>';
+          html += '<div class="chart-title">Loom\\'s Top Comments</div>';
           html += '<div class="ranking-list">';
           for (const comment of data.topCommentsData) {
             const autoTag = comment.autonomous ? ' 🤖' : '';
