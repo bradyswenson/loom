@@ -55,6 +55,46 @@ import {
 const MAX_REPLY_LENGTH = 1900; // Discord limit is 2000, leave room for safety
 const RECENT_MESSAGE_WINDOW = 6;
 const MAX_CONTEXT_MSG_LENGTH = 200;
+const MAX_ATTACHMENT_SIZE = 50000; // 50KB max for text attachments
+
+/**
+ * Extract text content from message attachments.
+ * Supports .md, .txt, and other text files.
+ */
+async function extractAttachmentText(message: Message): Promise<string | null> {
+  if (!message.attachments || message.attachments.size === 0) {
+    return null;
+  }
+
+  const textExtensions = [".md", ".txt", ".text", ".markdown"];
+  const attachments = [...message.attachments.values()];
+
+  for (const attachment of attachments) {
+    const name = attachment.name?.toLowerCase() || "";
+    const isTextFile = textExtensions.some(ext => name.endsWith(ext));
+
+    if (!isTextFile) continue;
+    if (attachment.size > MAX_ATTACHMENT_SIZE) {
+      console.log(`discord: attachment ${attachment.name} too large (${attachment.size} bytes)`);
+      continue;
+    }
+
+    try {
+      const response = await fetch(attachment.url);
+      if (!response.ok) {
+        console.error(`discord: failed to fetch attachment ${attachment.name}: ${response.status}`);
+        continue;
+      }
+      const text = await response.text();
+      console.log(`discord: extracted ${text.length} chars from attachment ${attachment.name}`);
+      return text;
+    } catch (err) {
+      console.error(`discord: error fetching attachment ${attachment.name}:`, err);
+    }
+  }
+
+  return null;
+}
 
 /**
  * Strip bot mentions from message content.
@@ -774,7 +814,7 @@ async function getMoltbookContext(): Promise<{ feed: string; submolts: string; p
 /**
  * Handle a Moltbook post request.
  */
-async function handleMoltbookPost(message: Message, text: string, context: string): Promise<void> {
+async function handleMoltbookPost(message: Message, text: string, context: string, attachmentText?: string | null): Promise<void> {
   if (!moltbookConfigured()) {
     await message.reply({ content: "Moltbook is not configured. Set MOLTBOOK_API_KEY to enable." });
     return;
@@ -789,6 +829,85 @@ async function handleMoltbookPost(message: Message, text: string, context: strin
   if (!postCheck.allowed && !commentCheck.allowed) {
     await message.reply({
       content: `Cooldown active:\n- Posts: ${postCheck.reason}\n- Comments: ${commentCheck.reason}\n\nToday: ${status.postsToday} posts, ${status.commentsToday} comments.`
+    });
+    return;
+  }
+
+  // If we have attachment text, extract title and use it directly
+  if (attachmentText && attachmentText.trim().length > 0) {
+    // Try to extract title from the attachment (look for # Title or Title: pattern)
+    let title: string | null = null;
+    let content = attachmentText.trim();
+
+    // Check for markdown title (# Title)
+    const mdTitleMatch = content.match(/^#\s+(.+)$/m);
+    if (mdTitleMatch) {
+      title = mdTitleMatch[1].trim();
+    }
+    // Check for "Title:" or "Title\n" at start
+    const titleLineMatch = content.match(/^Title[:\s]+(.+?)(?:\n|$)/i);
+    if (!title && titleLineMatch) {
+      title = titleLineMatch[1].trim();
+      // Remove the title line from content
+      content = content.replace(/^Title[:\s]+.+?\n?/i, "").trim();
+    }
+
+    if (!title) {
+      // Use first line as title if it's short enough
+      const firstLine = content.split("\n")[0].trim();
+      if (firstLine.length <= 100 && firstLine.length > 5) {
+        title = firstLine;
+        content = content.slice(firstLine.length).trim();
+      } else {
+        title = "Untitled Post";
+      }
+    }
+
+    // Post directly with attachment content
+    await message.reply({ content: `posting "${title}" from your attachment...` });
+
+    const submoltsResult = await getSubmolts();
+    const submolt = await validateSubmolt("general"); // Default to general, could be smarter
+
+    const postResult = await createPost({ title, content, submolt });
+
+    if (!postResult.ok) {
+      appendReceipt({
+        ts: new Date().toISOString(),
+        action: "post",
+        surface: "moltbook",
+        submolt,
+        title,
+        contentPreview: content.slice(0, 100),
+        success: false,
+        error: postResult.error,
+      });
+      await message.reply({ content: `failed to post: ${postResult.error}` });
+      return;
+    }
+
+    recordPostState();
+    const postId = postResult.post?.id;
+    const postUrl = postId ? `https://www.moltbook.com/post/${postId}` : null;
+
+    if (postId) {
+      await recordPostMemory(postId, title, content, submolt, false);
+    }
+
+    appendReceipt({
+      ts: new Date().toISOString(),
+      action: "post",
+      surface: "moltbook",
+      postId,
+      submolt,
+      title,
+      contentPreview: content.slice(0, 100),
+      success: true,
+    });
+
+    console.log(`moltbook: posted from attachment id=${postId} submolt=${submolt}`);
+    await message.reply({
+      content: `done! posted to ${submolt}\n\n**${title}**\n\n${postUrl ?? "(no URL)"}`
     });
     return;
   }
@@ -1311,9 +1430,12 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
     // Build context
     const context = await buildContext(channel, message.id);
 
+    // Extract any text from attachments (for posting .md files etc)
+    const attachmentText = await extractAttachmentText(message);
+
     // Check if this is a Moltbook post request
     if (isMoltbookPostRequest(text)) {
-      await handleMoltbookPost(message, text, context);
+      await handleMoltbookPost(message, text, context, attachmentText);
       return;
     }
 
