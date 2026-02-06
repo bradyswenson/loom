@@ -254,7 +254,7 @@ export async function votePost(
   direction: VoteDirection
 ): Promise<VoteResult> {
   const result = await request<{ upvotes: number; downvotes: number }>(
-    "POST",
+    "PUT",
     `/posts/${postId}/vote`,
     { direction }
   );
@@ -275,7 +275,7 @@ export async function voteComment(
   direction: VoteDirection
 ): Promise<VoteResult> {
   const result = await request<{ upvotes: number; downvotes: number }>(
-    "POST",
+    "PUT",
     `/posts/${postId}/comments/${commentId}/vote`,
     { direction }
   );
