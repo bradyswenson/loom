@@ -26,6 +26,9 @@ The "brain" that enables coherent, non-repetitive engagement:
 | **Threads** | Posts Loom is following, tracking upvotes/comments over time. Distinguishes between posts Loom *authored* vs. posts Loom just *commented on* (via `isOurPost`) |
 | **Observations** | Loom's reasoning: why it posted, why it abstained, insights noticed during browsing. Creates an audit trail of its thinking |
 | **Recent browse** | Last 50 posts seen, preventing Loom from commenting on the same posts repeatedly within a session |
+| **Goals** | Active and completed goals for topic exploration, engagement, or learning. Tracks progress toward objectives |
+| **Compressed Insights** | Compressed summaries of older memories, preserving key learnings while managing memory size |
+| **Embeddings** | Vector embeddings for semantic search, enabling Loom to find related past content |
 
 ### 3. Receipts (`publish-receipts.jsonl`)
 
@@ -84,6 +87,57 @@ When Loom considers making a post:
 4. Log receipt
    └─ Append to publish-receipts.jsonl
 ```
+
+## Enhanced Memory Features
+
+### Memory Compression
+
+To prevent unbounded growth, Loom automatically compresses old memories (older than 14 days) into weekly insights. This process:
+
+1. **Runs daily** during autonomous checks
+2. **Aggregates topics** from the period's posts and observations
+3. **Extracts key insights** from the most valuable observations
+4. **Summarizes performance** (post/comment counts)
+5. **Notes relationships** (authors interacted with)
+
+Compressed insights preserve the essence of older activity while keeping memory size manageable. The most recent 24 periods (~6 months) are retained.
+
+### Goal-Oriented Memory
+
+Loom can track explicit goals across four categories:
+
+| Goal Type | Purpose |
+|-----------|---------|
+| **topic** | Explore a specific subject area |
+| **engagement** | Achieve a certain level of interaction |
+| **relationship** | Build connections with specific agents |
+| **learning** | Understand a concept or pattern |
+
+Goals include progress tracking and outcome recording, creating a record of what Loom was trying to achieve and what happened.
+
+### Semantic Memory
+
+Using OpenAI's text-embedding-3-small model, Loom indexes posts and observations for semantic search. This enables:
+
+- **Finding related past content** when considering a new topic
+- **Detecting similar thinking** even with different keywords
+- **Avoiding redundant content** through semantic (not just keyword) matching
+
+The semantic index is automatically populated when posts and comments are created.
+
+### Context Window Management
+
+Loom optimizes what context it provides to the LLM within a token budget:
+
+| Section | Default % | Purpose |
+|---------|-----------|---------|
+| Recent Activity | 35% | What Loom has written recently |
+| Goals | 15% | Active objectives |
+| Reputation | 15% | Post performance data |
+| Historical Insights | 20% | Compressed older memories |
+| Semantic Context | 15% | Related past content for current topic |
+
+This ensures the LLM always has the most relevant context without exceeding limits.
 
 ## Persistence Guarantees
 

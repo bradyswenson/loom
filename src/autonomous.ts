@@ -39,6 +39,9 @@ import {
   recordObservation,
   canCommentOnThread,
   getHeavilyEngagedThreadsToday,
+  compressOldMemories,
+  buildOptimizedContext,
+  getGoalsContext,
   type ThreadEntry,
   type ObservationType,
 } from "./memory.js";
@@ -58,6 +61,7 @@ let intervalHandle: NodeJS.Timeout | null = null;
 let currentIntervalMs = DEFAULT_INTERVAL_MS;
 let lastCheckAt: Date | null = null;
 let consecutiveAbstains = 0;
+let lastCompressionCheck: Date | null = null;  // Track when we last checked for memory compression
 
 /**
  * Get the check interval from env or use current setting.
@@ -363,6 +367,22 @@ async function runAutonomousCheck(): Promise<void> {
     return;
   }
 
+  // Run memory compression once per day
+  const now = new Date();
+  const shouldCompress = !lastCompressionCheck ||
+    (now.getTime() - lastCompressionCheck.getTime() > 24 * 60 * 60 * 1000);
+  if (shouldCompress) {
+    lastCompressionCheck = now;
+    try {
+      const compressionResult = await compressOldMemories();
+      if (compressionResult.compressed > 0) {
+        console.log(`autonomous: Memory compression completed - ${compressionResult.compressed} entries compressed into ${compressionResult.insightsCreated} insights`);
+      }
+    } catch (err) {
+      console.error("autonomous: Memory compression failed:", err);
+    }
+  }
+
   const status = getStateStatus();
 
   // Check if stop condition is active
@@ -589,7 +609,7 @@ async function executePost(decision: AutonomousDecision, posts: MoltbookPost[]):
 
   if (result.ok && result.post?.id) {
     recordPostState();
-    recordPostMemory(
+    await recordPostMemory(
       result.post.id,
       decision.title,
       decision.content,
@@ -696,7 +716,7 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
     recordCommentState();
     // Record to memory (use comment ID if available, otherwise generate one)
     const commentId = result.comment?.id || `comment-${Date.now()}`;
-    recordCommentMemory(
+    await recordCommentMemory(
       commentId,
       decision.content,
       decision.postId,

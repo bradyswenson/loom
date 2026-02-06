@@ -42,6 +42,8 @@ import {
   readMemory,
   getBrowseContext,
   getObservationsContext,
+  getEnhancedMemoryStats,
+  getActiveGoals,
 } from "./memory.js";
 import {
   initAlerts,
@@ -551,6 +553,7 @@ function formatStatusReport(): string {
 
   // Add memory stats (always show)
   const memStats = getMemoryStats();
+  const enhancedStats = getEnhancedMemoryStats();
   const memory = readMemory();
   const browseCount = memory.recentBrowse?.length || 0;
   lines.push("");
@@ -569,6 +572,17 @@ function formatStatusReport(): string {
     lines.push(`• Last browse: ${browseCount} posts (${browseAge}m ago)`);
   } else {
     lines.push(`• Last browse: none`);
+  }
+
+  // Enhanced memory features
+  if (enhancedStats.goals.active > 0) {
+    lines.push(`• Active goals: ${enhancedStats.goals.active}`);
+  }
+  if (enhancedStats.compressedInsights > 0) {
+    lines.push(`• Compressed insights: ${enhancedStats.compressedInsights} periods`);
+  }
+  if (enhancedStats.embeddings > 0) {
+    lines.push(`• Semantic index: ${enhancedStats.embeddings} entries`);
   }
 
   // Add reputation stats
@@ -963,7 +977,7 @@ REASON: [brief reason]`;
 
     // Record to memory
     const commentId = commentResult.comment?.id || `comment-${Date.now()}`;
-    recordCommentMemory(
+    await recordCommentMemory(
       commentId,
       commentContent,
       targetPostId,
@@ -1038,7 +1052,7 @@ REASON: [brief reason]`;
 
   // Record to memory
   if (postId) {
-    recordPostMemory(
+    await recordPostMemory(
       postId,
       title,
       content,

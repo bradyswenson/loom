@@ -76,11 +76,49 @@ export interface Observation {
   contentPreview?: string;       // Preview of what was posted/commented
 }
 
+// ===== NEW: Goal-Oriented Memory =====
+export interface Goal {
+  id: string;
+  createdAt: string;
+  description: string;           // What Loom wants to achieve
+  type: "topic" | "engagement" | "relationship" | "learning";
+  status: "active" | "completed" | "abandoned";
+  targetDate?: string;           // Optional deadline
+  progress: string[];            // Notes on progress
+  completedAt?: string;
+  outcome?: string;              // What happened when completed/abandoned
+}
+
+// ===== NEW: Compressed Memory =====
+export interface CompressedInsight {
+  id: string;
+  createdAt: string;
+  period: string;                // e.g., "2024-W03" or "2024-01"
+  topicCluster: string[];        // Main topics from this period
+  keyInsights: string[];         // Compressed learnings
+  performanceSummary: string;    // How posts performed
+  relationshipsNoted: string[];  // Authors/agents noticed
+  entryCount: number;            // How many entries were compressed
+}
+
+// ===== NEW: Embedding Cache =====
+export interface EmbeddingEntry {
+  id: string;                    // Reference to MemoryEntry.id or Observation.id
+  type: "entry" | "observation";
+  embedding: number[];           // Vector embedding
+  createdAt: string;
+}
+
 export interface LoomMemory {
   entries: MemoryEntry[];
   threads: ThreadEntry[];        // Posts we're following
   recentBrowse: SeenPost[];      // Posts seen during recent autonomous checks
   observations: Observation[];   // Loom's notes about interesting things
+  // NEW: Enhanced memory features
+  goals?: Goal[];                // Active and completed goals
+  compressedInsights?: CompressedInsight[];  // Compressed older memories
+  embeddings?: EmbeddingEntry[]; // Cached embeddings for semantic search
+  lastCompression?: string;      // ISO timestamp of last compression run
   version: number;
 }
 
@@ -178,13 +216,13 @@ export function generateSummary(content: string, maxLength: number = 150): strin
 /**
  * Record a new post to memory.
  */
-export function recordPost(
+export async function recordPost(
   postId: string,
   title: string,
   content: string,
   submolt: string,
   autonomous: boolean
-): void {
+): Promise<void> {
   const memory = readMemory();
 
   const entry: MemoryEntry = {
@@ -217,19 +255,24 @@ export function recordPost(
 
   writeMemory(memory);
   console.log(`memory: recorded post "${title}" with topics: ${entry.topics.join(", ")}`);
+
+  // Index for semantic search (async, don't block)
+  indexForSemanticSearch(postId, "entry", `${title} ${content}`).catch(err => {
+    console.error("memory: failed to index post for semantic search", err);
+  });
 }
 
 /**
  * Record a new comment to memory.
  */
-export function recordComment(
+export async function recordComment(
   commentId: string,
   content: string,
   targetPostId: string,
   targetPostTitle: string,
   submolt: string | undefined,
   autonomous: boolean
-): void {
+): Promise<void> {
   const memory = readMemory();
 
   const entry: MemoryEntry = {
@@ -270,6 +313,11 @@ export function recordComment(
 
   writeMemory(memory);
   console.log(`memory: recorded comment on "${targetPostTitle}" with topics: ${entry.topics.join(", ")}`);
+
+  // Index for semantic search (async, don't block)
+  indexForSemanticSearch(commentId, "entry", `${targetPostTitle} ${content}`).catch(err => {
+    console.error("memory: failed to index comment for semantic search", err);
+  });
 }
 
 /**
@@ -815,4 +863,582 @@ export function getObservationsContext(limit: number = 10): string {
   }
 
   return lines.join("\n");
+}
+
+// ==========================================
+// MEMORY DECAY/COMPRESSION SYSTEM
+// ==========================================
+
+const COMPRESSION_AGE_DAYS = 14;  // Compress memories older than 2 weeks
+const MAX_COMPRESSED_INSIGHTS = 24; // ~2 years of monthly compressions
+
+/**
+ * Compress old memories into insights to prevent unbounded growth.
+ * Should be called periodically (e.g., daily or weekly).
+ */
+export async function compressOldMemories(): Promise<{ compressed: number; insightsCreated: number }> {
+  const memory = readMemory();
+  const cutoffDate = new Date(Date.now() - COMPRESSION_AGE_DAYS * 24 * 60 * 60 * 1000);
+
+  // Find entries older than cutoff that haven't been compressed
+  const oldEntries = memory.entries.filter(e => new Date(e.ts) < cutoffDate);
+  const oldObservations = (memory.observations || []).filter(o => new Date(o.ts) < cutoffDate);
+
+  if (oldEntries.length === 0 && oldObservations.length === 0) {
+    console.log("memory: no old memories to compress");
+    return { compressed: 0, insightsCreated: 0 };
+  }
+
+  // Group by week/month for compression
+  const periodGroups = new Map<string, { entries: MemoryEntry[]; observations: Observation[] }>();
+
+  for (const entry of oldEntries) {
+    const period = getWeekPeriod(entry.ts);
+    if (!periodGroups.has(period)) {
+      periodGroups.set(period, { entries: [], observations: [] });
+    }
+    periodGroups.get(period)!.entries.push(entry);
+  }
+
+  for (const obs of oldObservations) {
+    const period = getWeekPeriod(obs.ts);
+    if (!periodGroups.has(period)) {
+      periodGroups.set(period, { entries: [], observations: [] });
+    }
+    periodGroups.get(period)!.observations.push(obs);
+  }
+
+  // Create compressed insights for each period
+  memory.compressedInsights = memory.compressedInsights || [];
+  let insightsCreated = 0;
+
+  for (const [period, group] of periodGroups) {
+    // Skip if we already have an insight for this period
+    if (memory.compressedInsights.some(c => c.period === period)) {
+      continue;
+    }
+
+    const insight = createCompressedInsight(period, group.entries, group.observations);
+    memory.compressedInsights.push(insight);
+    insightsCreated++;
+  }
+
+  // Trim compressed insights to max
+  if (memory.compressedInsights.length > MAX_COMPRESSED_INSIGHTS) {
+    memory.compressedInsights = memory.compressedInsights.slice(-MAX_COMPRESSED_INSIGHTS);
+  }
+
+  // Remove compressed entries (keep only recent ones)
+  const compressedIds = new Set(oldEntries.map(e => e.id));
+  memory.entries = memory.entries.filter(e => !compressedIds.has(e.id));
+
+  // Remove compressed observations
+  const compressedObsIds = new Set(oldObservations.map(o => o.id));
+  memory.observations = (memory.observations || []).filter(o => !compressedObsIds.has(o.id));
+
+  memory.lastCompression = new Date().toISOString();
+  writeMemory(memory);
+
+  const totalCompressed = oldEntries.length + oldObservations.length;
+  console.log(`memory: compressed ${totalCompressed} old memories into ${insightsCreated} insights`);
+
+  return { compressed: totalCompressed, insightsCreated };
+}
+
+function getWeekPeriod(ts: string): string {
+  const date = new Date(ts);
+  const year = date.getFullYear();
+  const week = getWeekNumber(date);
+  return `${year}-W${week.toString().padStart(2, "0")}`;
+}
+
+function getWeekNumber(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+function createCompressedInsight(
+  period: string,
+  entries: MemoryEntry[],
+  observations: Observation[]
+): CompressedInsight {
+  // Aggregate topics
+  const topicCounts = new Map<string, number>();
+  for (const e of entries) {
+    for (const t of e.topics) {
+      topicCounts.set(t, (topicCounts.get(t) || 0) + 1);
+    }
+  }
+  for (const o of observations) {
+    for (const t of o.topics) {
+      topicCounts.set(t, (topicCounts.get(t) || 0) + 1);
+    }
+  }
+  const topTopics = [...topicCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([t]) => t);
+
+  // Extract key insights from observations
+  const keyInsights = observations
+    .filter(o => o.type === "insight" || o.type === "post_justification")
+    .map(o => o.note)
+    .slice(0, 3);
+
+  // Summarize performance
+  const posts = entries.filter(e => e.type === "post");
+  const comments = entries.filter(e => e.type === "comment");
+  const performanceSummary = `${posts.length} posts, ${comments.length} comments`;
+
+  // Note relationships (authors interacted with)
+  const authors = new Set<string>();
+  for (const o of observations) {
+    if (o.postAuthor) authors.add(o.postAuthor);
+  }
+
+  return {
+    id: `compressed-${period}`,
+    createdAt: new Date().toISOString(),
+    period,
+    topicCluster: topTopics,
+    keyInsights,
+    performanceSummary,
+    relationshipsNoted: [...authors].slice(0, 5),
+    entryCount: entries.length + observations.length,
+  };
+}
+
+/**
+ * Get compressed insights context for LLM prompts.
+ */
+export function getCompressedInsightsContext(): string {
+  const memory = readMemory();
+  const insights = memory.compressedInsights || [];
+
+  if (insights.length === 0) return "";
+
+  const lines: string[] = ["HISTORICAL MEMORY (compressed from older activity):"];
+
+  for (const insight of insights.slice(-6)) {  // Last 6 weeks/periods
+    const topics = insight.topicCluster.join(", ");
+    lines.push(`• ${insight.period}: ${insight.performanceSummary} | Topics: ${topics}`);
+    if (insight.keyInsights.length > 0) {
+      lines.push(`  Key insight: ${insight.keyInsights[0].slice(0, 100)}...`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+// ==========================================
+// GOAL-ORIENTED MEMORY
+// ==========================================
+
+const MAX_GOALS = 20;
+
+/**
+ * Add a new goal.
+ */
+export function addGoal(
+  description: string,
+  type: Goal["type"],
+  targetDate?: string
+): Goal {
+  const memory = readMemory();
+  memory.goals = memory.goals || [];
+
+  const goal: Goal = {
+    id: `goal-${Date.now()}`,
+    createdAt: new Date().toISOString(),
+    description,
+    type,
+    status: "active",
+    targetDate,
+    progress: [],
+  };
+
+  memory.goals.push(goal);
+
+  // Trim old completed/abandoned goals
+  const active = memory.goals.filter(g => g.status === "active");
+  const completed = memory.goals.filter(g => g.status !== "active").slice(-10);
+  memory.goals = [...completed, ...active].slice(-MAX_GOALS);
+
+  writeMemory(memory);
+  console.log(`memory: added goal "${description}" (${type})`);
+
+  return goal;
+}
+
+/**
+ * Update goal progress.
+ */
+export function updateGoalProgress(goalId: string, progressNote: string): void {
+  const memory = readMemory();
+  const goal = (memory.goals || []).find(g => g.id === goalId);
+
+  if (goal) {
+    goal.progress.push(`[${new Date().toISOString().slice(0, 10)}] ${progressNote}`);
+    writeMemory(memory);
+    console.log(`memory: updated progress for goal ${goalId}`);
+  }
+}
+
+/**
+ * Complete or abandon a goal.
+ */
+export function resolveGoal(goalId: string, status: "completed" | "abandoned", outcome: string): void {
+  const memory = readMemory();
+  const goal = (memory.goals || []).find(g => g.id === goalId);
+
+  if (goal) {
+    goal.status = status;
+    goal.completedAt = new Date().toISOString();
+    goal.outcome = outcome;
+    writeMemory(memory);
+    console.log(`memory: ${status} goal ${goalId}: ${outcome}`);
+  }
+}
+
+/**
+ * Get active goals.
+ */
+export function getActiveGoals(): Goal[] {
+  const memory = readMemory();
+  return (memory.goals || []).filter(g => g.status === "active");
+}
+
+/**
+ * Get goals context for LLM prompts.
+ */
+export function getGoalsContext(): string {
+  const activeGoals = getActiveGoals();
+
+  if (activeGoals.length === 0) return "";
+
+  const lines: string[] = ["MY CURRENT GOALS:"];
+
+  for (const goal of activeGoals) {
+    const deadline = goal.targetDate ? ` (target: ${goal.targetDate})` : "";
+    lines.push(`• [${goal.type}] ${goal.description}${deadline}`);
+    if (goal.progress.length > 0) {
+      const lastProgress = goal.progress[goal.progress.length - 1];
+      lines.push(`  Latest: ${lastProgress}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+// ==========================================
+// SEMANTIC MEMORY (Embeddings)
+// ==========================================
+
+const EMBEDDING_MODEL = "text-embedding-3-small";
+const MAX_EMBEDDINGS = 200;
+
+/**
+ * Get embedding for text using OpenAI API.
+ */
+async function getEmbedding(text: string): Promise<number[] | null> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    console.log("memory: no OpenAI API key, skipping embedding");
+    return null;
+  }
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: EMBEDDING_MODEL,
+        input: text.slice(0, 8000),  // Truncate to model limit
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("memory: embedding API error", response.status);
+      return null;
+    }
+
+    const data = await response.json() as { data: Array<{ embedding: number[] }> };
+    return data.data[0]?.embedding || null;
+  } catch (err) {
+    console.error("memory: embedding request failed", err);
+    return null;
+  }
+}
+
+/**
+ * Compute cosine similarity between two vectors.
+ */
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) return 0;
+
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+
+  const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
+  return magnitude === 0 ? 0 : dotProduct / magnitude;
+}
+
+/**
+ * Index a memory entry for semantic search.
+ */
+export async function indexForSemanticSearch(
+  id: string,
+  type: "entry" | "observation",
+  text: string
+): Promise<void> {
+  const embedding = await getEmbedding(text);
+  if (!embedding) return;
+
+  const memory = readMemory();
+  memory.embeddings = memory.embeddings || [];
+
+  // Remove existing embedding for this ID
+  memory.embeddings = memory.embeddings.filter(e => e.id !== id);
+
+  memory.embeddings.push({
+    id,
+    type,
+    embedding,
+    createdAt: new Date().toISOString(),
+  });
+
+  // Trim to max
+  if (memory.embeddings.length > MAX_EMBEDDINGS) {
+    memory.embeddings = memory.embeddings.slice(-MAX_EMBEDDINGS);
+  }
+
+  writeMemory(memory);
+}
+
+/**
+ * Find semantically similar memories.
+ */
+export async function findSimilarMemories(
+  query: string,
+  limit: number = 5
+): Promise<Array<{ id: string; type: "entry" | "observation"; similarity: number; content: string }>> {
+  const queryEmbedding = await getEmbedding(query);
+  if (!queryEmbedding) return [];
+
+  const memory = readMemory();
+  const embeddings = memory.embeddings || [];
+
+  if (embeddings.length === 0) return [];
+
+  // Calculate similarities
+  const similarities = embeddings.map(e => ({
+    ...e,
+    similarity: cosineSimilarity(queryEmbedding, e.embedding),
+  }));
+
+  // Sort by similarity
+  similarities.sort((a, b) => b.similarity - a.similarity);
+
+  // Get top results with content
+  const results: Array<{ id: string; type: "entry" | "observation"; similarity: number; content: string }> = [];
+
+  for (const sim of similarities.slice(0, limit)) {
+    if (sim.similarity < 0.5) continue;  // Skip low similarity
+
+    let content = "";
+    if (sim.type === "entry") {
+      const entry = memory.entries.find(e => e.id === sim.id);
+      content = entry ? `${entry.title || ""}: ${entry.summary}` : "";
+    } else {
+      const obs = (memory.observations || []).find(o => o.id === sim.id);
+      content = obs ? obs.note : "";
+    }
+
+    if (content) {
+      results.push({
+        id: sim.id,
+        type: sim.type,
+        similarity: sim.similarity,
+        content,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Get semantic context for a topic (finds related past content).
+ */
+export async function getSemanticContext(topic: string): Promise<string> {
+  const similar = await findSimilarMemories(topic, 3);
+
+  if (similar.length === 0) return "";
+
+  const lines: string[] = ["RELATED PAST THINKING:"];
+  for (const s of similar) {
+    const typeLabel = s.type === "entry" ? "wrote" : "thought";
+    lines.push(`• Previously ${typeLabel}: ${s.content.slice(0, 150)}... (${(s.similarity * 100).toFixed(0)}% related)`);
+  }
+
+  return lines.join("\n");
+}
+
+// ==========================================
+// CONTEXT WINDOW MANAGEMENT
+// ==========================================
+
+export interface ContextBudget {
+  maxChars: number;
+  allocations: {
+    recentActivity: number;      // % for recent posts/comments
+    goals: number;               // % for active goals
+    reputation: number;          // % for performance context
+    historicalInsights: number;  // % for compressed history
+    semanticContext: number;     // % for related past content
+  };
+}
+
+const DEFAULT_CONTEXT_BUDGET: ContextBudget = {
+  maxChars: 8000,  // ~2000 tokens
+  allocations: {
+    recentActivity: 35,
+    goals: 15,
+    reputation: 15,
+    historicalInsights: 20,
+    semanticContext: 15,
+  },
+};
+
+/**
+ * Build optimized context for LLM prompts within budget.
+ */
+export async function buildOptimizedContext(
+  options?: {
+    topic?: string;              // Topic for semantic retrieval
+    budget?: Partial<ContextBudget>;
+  }
+): Promise<string> {
+  const budget = { ...DEFAULT_CONTEXT_BUDGET, ...options?.budget };
+  const sections: Array<{ priority: number; content: string; allocation: number }> = [];
+
+  // Calculate char limits for each section
+  const getAllocation = (key: keyof typeof budget.allocations) =>
+    Math.floor(budget.maxChars * (budget.allocations[key] / 100));
+
+  // 1. Recent activity (highest priority)
+  const memoryContext = getMemoryContext();
+  if (memoryContext) {
+    sections.push({
+      priority: 1,
+      content: truncateToLimit(memoryContext, getAllocation("recentActivity")),
+      allocation: budget.allocations.recentActivity,
+    });
+  }
+
+  // 2. Goals context
+  const goalsContext = getGoalsContext();
+  if (goalsContext) {
+    sections.push({
+      priority: 2,
+      content: truncateToLimit(goalsContext, getAllocation("goals")),
+      allocation: budget.allocations.goals,
+    });
+  }
+
+  // 3. Reputation context
+  const repContext = getReputationContext();
+  if (repContext) {
+    sections.push({
+      priority: 3,
+      content: truncateToLimit(repContext, getAllocation("reputation")),
+      allocation: budget.allocations.reputation,
+    });
+  }
+
+  // 4. Historical insights
+  const historyContext = getCompressedInsightsContext();
+  if (historyContext) {
+    sections.push({
+      priority: 4,
+      content: truncateToLimit(historyContext, getAllocation("historicalInsights")),
+      allocation: budget.allocations.historicalInsights,
+    });
+  }
+
+  // 5. Semantic context (if topic provided)
+  if (options?.topic) {
+    const semanticContext = await getSemanticContext(options.topic);
+    if (semanticContext) {
+      sections.push({
+        priority: 5,
+        content: truncateToLimit(semanticContext, getAllocation("semanticContext")),
+        allocation: budget.allocations.semanticContext,
+      });
+    }
+  }
+
+  // Sort by priority and join
+  sections.sort((a, b) => a.priority - b.priority);
+
+  const combined = sections.map(s => s.content).filter(Boolean).join("\n\n");
+
+  // Final truncation if needed
+  return truncateToLimit(combined, budget.maxChars);
+}
+
+function truncateToLimit(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+
+  // Try to truncate at a line boundary
+  const truncated = text.slice(0, limit);
+  const lastNewline = truncated.lastIndexOf("\n");
+
+  if (lastNewline > limit * 0.7) {
+    return truncated.slice(0, lastNewline) + "\n...";
+  }
+
+  return truncated + "...";
+}
+
+/**
+ * Get memory system stats including new features.
+ */
+export function getEnhancedMemoryStats(): {
+  entries: number;
+  observations: number;
+  threads: number;
+  goals: { active: number; completed: number };
+  compressedInsights: number;
+  embeddings: number;
+  lastCompression?: string;
+} {
+  const memory = readMemory();
+
+  const goals = memory.goals || [];
+  const activeGoals = goals.filter(g => g.status === "active").length;
+  const completedGoals = goals.filter(g => g.status !== "active").length;
+
+  return {
+    entries: memory.entries.length,
+    observations: (memory.observations || []).length,
+    threads: memory.threads.length,
+    goals: { active: activeGoals, completed: completedGoals },
+    compressedInsights: (memory.compressedInsights || []).length,
+    embeddings: (memory.embeddings || []).length,
+    lastCompression: memory.lastCompression,
+  };
 }
