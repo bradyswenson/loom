@@ -111,11 +111,13 @@ interface AttachmentResult {
  */
 async function extractAttachmentText(message: Message): Promise<AttachmentResult | null> {
   if (!message.attachments || message.attachments.size === 0) {
+    console.log(`discord: no attachments in message`);
     return null;
   }
 
   const textExtensions = [".md", ".txt", ".text", ".markdown"];
   const attachments = [...message.attachments.values()];
+  console.log(`discord: found ${attachments.length} attachment(s): ${attachments.map(a => `${a.name} (${a.size} bytes)`).join(", ")}`);
 
   for (const attachment of attachments) {
     const name = attachment.name?.toLowerCase() || "";
@@ -167,9 +169,14 @@ async function extractAttachmentText(message: Message): Promise<AttachmentResult
       };
     } catch (err) {
       console.error(`discord: error processing attachment ${attachment.name}:`, err);
+      // Log more details for PDF errors
+      if (name.endsWith(".pdf")) {
+        console.error(`discord: PDF parsing failed - this may indicate pdf-parse library issue`);
+      }
     }
   }
 
+  console.log(`discord: no valid text extracted from any attachment`);
   return null;
 }
 
