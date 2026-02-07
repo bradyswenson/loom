@@ -108,10 +108,24 @@ export interface CompressedInsight {
 
 // ===== NEW: Embedding Cache =====
 export interface EmbeddingEntry {
-  id: string;                    // Reference to MemoryEntry.id or Observation.id
-  type: "entry" | "observation";
+  id: string;                    // Reference to MemoryEntry.id, Observation.id, or ReferenceDoc.id
+  type: "entry" | "observation" | "reference";
   embedding: number[];           // Vector embedding
   createdAt: string;
+}
+
+// ===== NEW: Long-Term Reference Documents =====
+export interface ReferenceDoc {
+  id: string;
+  title: string;                 // Human-readable title
+  content: string;               // Full document content
+  summary: string;               // LLM-generated summary for quick recall
+  fileName?: string;             // Original filename if from attachment
+  fileSize?: number;             // Original file size
+  addedAt: string;               // ISO timestamp
+  lastAccessed?: string;         // Last time this was retrieved
+  accessCount: number;           // How many times retrieved
+  // References do NOT decay - they persist until manually removed
 }
 
 export interface LoomMemory {
@@ -123,6 +137,7 @@ export interface LoomMemory {
   goals?: Goal[];                // Active and completed goals
   compressedInsights?: CompressedInsight[];  // Compressed older memories
   embeddings?: EmbeddingEntry[]; // Cached embeddings for semantic search
+  references?: ReferenceDoc[];   // Long-term reference documents (no decay)
   lastCompression?: string;      // ISO timestamp of last compression run
   version: number;
 }
@@ -1228,7 +1243,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
  */
 export async function indexForSemanticSearch(
   id: string,
-  type: "entry" | "observation",
+  type: "entry" | "observation" | "reference",
   text: string
 ): Promise<void> {
   const embedding = await getEmbedding(text);
@@ -1261,7 +1276,7 @@ export async function indexForSemanticSearch(
 export async function findSimilarMemories(
   query: string,
   limit: number = 5
-): Promise<Array<{ id: string; type: "entry" | "observation"; similarity: number; content: string }>> {
+): Promise<Array<{ id: string; type: "entry" | "observation" | "reference"; similarity: number; content: string }>> {
   const queryEmbedding = await getEmbedding(query);
   if (!queryEmbedding) return [];
 
@@ -1280,7 +1295,7 @@ export async function findSimilarMemories(
   similarities.sort((a, b) => b.similarity - a.similarity);
 
   // Get top results with content
-  const results: Array<{ id: string; type: "entry" | "observation"; similarity: number; content: string }> = [];
+  const results: Array<{ id: string; type: "entry" | "observation" | "reference"; similarity: number; content: string }> = [];
 
   for (const sim of similarities.slice(0, limit)) {
     if (sim.similarity < 0.5) continue;  // Skip low similarity
@@ -1289,9 +1304,12 @@ export async function findSimilarMemories(
     if (sim.type === "entry") {
       const entry = memory.entries.find(e => e.id === sim.id);
       content = entry ? `${entry.title || ""}: ${entry.summary}` : "";
-    } else {
+    } else if (sim.type === "observation") {
       const obs = (memory.observations || []).find(o => o.id === sim.id);
       content = obs ? obs.note : "";
+    } else if (sim.type === "reference") {
+      const ref = (memory.references || []).find(r => r.id === sim.id);
+      content = ref ? `[Reference: ${ref.title}]\n${ref.content}` : "";
     }
 
     if (content) {
@@ -1317,8 +1335,169 @@ export async function getSemanticContext(topic: string): Promise<string> {
 
   const lines: string[] = ["RELATED PAST THINKING:"];
   for (const s of similar) {
-    const typeLabel = s.type === "entry" ? "wrote" : "thought";
+    const typeLabel = s.type === "entry" ? "wrote" : s.type === "reference" ? "reference" : "thought";
     lines.push(`• Previously ${typeLabel}: ${s.content.slice(0, 150)}... (${(s.similarity * 100).toFixed(0)}% related)`);
+  }
+
+  return lines.join("\n");
+}
+
+// ==========================================
+// LONG-TERM REFERENCE MANAGEMENT
+// ==========================================
+
+const MAX_REFERENCES = 50;  // Max stored reference documents
+
+/**
+ * Add a reference document to long-term memory.
+ * Generates embedding for semantic retrieval.
+ */
+export async function addReference(
+  title: string,
+  content: string,
+  summary: string,
+  options?: {
+    fileName?: string;
+    fileSize?: number;
+  }
+): Promise<ReferenceDoc> {
+  const memory = readMemory();
+  memory.references = memory.references || [];
+
+  const id = `ref-${Date.now()}`;
+  const reference: ReferenceDoc = {
+    id,
+    title,
+    content,
+    summary,
+    fileName: options?.fileName,
+    fileSize: options?.fileSize,
+    addedAt: new Date().toISOString(),
+    accessCount: 0,
+  };
+
+  memory.references.push(reference);
+
+  // Trim to max (remove oldest by addedAt)
+  if (memory.references.length > MAX_REFERENCES) {
+    memory.references.sort((a, b) => new Date(a.addedAt).getTime() - new Date(b.addedAt).getTime());
+    memory.references = memory.references.slice(-MAX_REFERENCES);
+  }
+
+  writeMemory(memory);
+
+  // Index for semantic search (use title + summary for embedding, keeps it focused)
+  const embeddingText = `${title}\n\n${summary}\n\n${content.slice(0, 4000)}`;
+  await indexForSemanticSearch(id, "reference", embeddingText);
+
+  console.log(`memory: added reference "${title}" id=${id}`);
+  return reference;
+}
+
+/**
+ * Delete a reference document by ID or title.
+ * Returns true if deleted, false if not found.
+ */
+export function deleteReference(idOrTitle: string): boolean {
+  const memory = readMemory();
+  const lowerSearch = idOrTitle.toLowerCase();
+
+  const initialLength = (memory.references || []).length;
+  memory.references = (memory.references || []).filter(r =>
+    r.id !== idOrTitle && r.title.toLowerCase() !== lowerSearch
+  );
+
+  if (memory.references.length < initialLength) {
+    // Also remove from embeddings
+    memory.embeddings = (memory.embeddings || []).filter(e =>
+      !(e.type === "reference" && (memory.references || []).every(r => r.id !== e.id))
+    );
+    writeMemory(memory);
+    console.log(`memory: deleted reference "${idOrTitle}"`);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Get all reference documents.
+ */
+export function getReferences(): ReferenceDoc[] {
+  const memory = readMemory();
+  return memory.references || [];
+}
+
+/**
+ * Find relevant references for a query using semantic search.
+ * Returns full content for injection into context.
+ */
+export async function findRelevantReferences(
+  query: string,
+  limit: number = 3,
+  minSimilarity: number = 0.6
+): Promise<Array<{ reference: ReferenceDoc; similarity: number }>> {
+  const queryEmbedding = await getEmbedding(query);
+  if (!queryEmbedding) return [];
+
+  const memory = readMemory();
+  const references = memory.references || [];
+  const embeddings = memory.embeddings || [];
+
+  if (references.length === 0) return [];
+
+  // Get reference embeddings only
+  const refEmbeddings = embeddings.filter(e => e.type === "reference");
+
+  // Calculate similarities
+  const similarities = refEmbeddings.map(e => ({
+    id: e.id,
+    similarity: cosineSimilarity(queryEmbedding, e.embedding),
+  }));
+
+  // Sort by similarity and filter
+  similarities.sort((a, b) => b.similarity - a.similarity);
+
+  const results: Array<{ reference: ReferenceDoc; similarity: number }> = [];
+
+  for (const sim of similarities.slice(0, limit)) {
+    if (sim.similarity < minSimilarity) continue;
+
+    const ref = references.find(r => r.id === sim.id);
+    if (ref) {
+      // Update access stats
+      ref.lastAccessed = new Date().toISOString();
+      ref.accessCount++;
+
+      results.push({
+        reference: ref,
+        similarity: sim.similarity,
+      });
+    }
+  }
+
+  // Save updated access stats
+  if (results.length > 0) {
+    writeMemory(memory);
+  }
+
+  return results;
+}
+
+/**
+ * Get reference context for a message - retrieves relevant references
+ * and formats them for injection into LLM context.
+ */
+export async function getReferenceContext(message: string): Promise<string> {
+  const relevant = await findRelevantReferences(message, 2, 0.55);
+
+  if (relevant.length === 0) return "";
+
+  const lines: string[] = ["RELEVANT REFERENCE DOCUMENTS:"];
+
+  for (const { reference, similarity } of relevant) {
+    lines.push(`\n--- ${reference.title} (${(similarity * 100).toFixed(0)}% relevant) ---`);
+    lines.push(reference.content);
+    lines.push(`--- End: ${reference.title} ---`);
   }
 
   return lines.join("\n");

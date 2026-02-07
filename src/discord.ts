@@ -48,6 +48,10 @@ import {
   getEnhancedMemoryStats,
   getActiveGoals,
   recordObservation,
+  addReference,
+  deleteReference,
+  getReferences,
+  getReferenceContext,
 } from "./memory.js";
 import {
   initAlerts,
@@ -542,11 +546,17 @@ function formatCommandsHelp(): string {
 • \`read post [id]\` — fetch and display a post
 • \`comment on [uuid]\` — comment on a post (e.g. comment on 8a828f9f-...)
 
+📚 **Long-Term References**
+• \`add reference [title]\` + attachment — save document for semantic recall
+• \`list references\` — show all stored reference documents
+• \`delete reference [title]\` — remove a reference
+
 🌐 **Dashboard**
 • Visit https://loom-v3.fly.dev/dashboard for the web UI
 
 💬 **Chat**
-• Just talk to me naturally — I'll respond conversationally`;
+• Just talk to me naturally — I'll respond conversationally
+• Relevant references are auto-retrieved based on conversation context`;
 }
 
 /**
@@ -886,6 +896,96 @@ function parseFocusInstruction(text: string): { action: "watch" | "publish" | "u
   }
 
   return null;
+}
+
+/**
+ * Parse reference management commands from operator.
+ * Recognizes patterns like:
+ * - "add reference [title]" + attachment → store document
+ * - "save as reference [title]" + attachment
+ * - "list references" / "show references"
+ * - "delete reference [title/id]"
+ */
+function parseReferenceCommand(text: string): { action: "add" | "list" | "delete"; title?: string } | null {
+  const lower = text.toLowerCase().trim();
+
+  // List references
+  if (/^(list|show)\s+references?$/i.test(lower) || lower === "references") {
+    return { action: "list" };
+  }
+
+  // Delete reference
+  const deleteMatch = text.match(/^(?:delete|remove)\s+reference\s+[""]?(.+?)[""]?$/i);
+  if (deleteMatch) {
+    return { action: "delete", title: deleteMatch[1].trim() };
+  }
+
+  // Add reference (requires attachment)
+  const addPatterns = [
+    /^(?:add|save|store)\s+(?:as\s+)?reference\s+[""]?(.+?)[""]?$/i,
+    /^reference\s+(?:this|add)\s+(?:as\s+)?[""]?(.+?)[""]?$/i,
+    /^save\s+(?:this\s+)?(?:as\s+)?reference\s+[""]?(.+?)[""]?$/i,
+  ];
+
+  for (const pattern of addPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return { action: "add", title: match[1].trim() };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Handle adding a reference from an attachment.
+ */
+async function handleAddReference(message: Message, title: string): Promise<void> {
+  // Extract attachment
+  const attachmentResult = await extractAttachmentText(message);
+
+  if (!attachmentResult) {
+    await message.reply({ content: "attach a .md or .txt file to save as a reference" });
+    return;
+  }
+
+  await message.reply({ content: `generating summary for "${title}"...` });
+
+  // Generate summary using LLM
+  const summaryPrompt = `Summarize this document in 200-300 words. Focus on:
+1. What this document is about
+2. Key concepts, arguments, or information
+3. Main conclusions or takeaways
+
+Be specific and include concrete details.
+
+DOCUMENT:
+${attachmentResult.text}`;
+
+  try {
+    const result = await generate({ userMessage: summaryPrompt, maxTokens: 600 });
+    const summary = result.text?.trim();
+
+    if (!summary || summary.length < 50) {
+      await message.reply({ content: "couldn't generate a good summary for this document" });
+      return;
+    }
+
+    // Add to references
+    const ref = await addReference(title, attachmentResult.text, summary, {
+      fileName: attachmentResult.fileName,
+      fileSize: attachmentResult.fileSize,
+    });
+
+    await message.reply({
+      content: `📚 saved reference "${title}"\n\n**Summary:**\n${summary.slice(0, 500)}${summary.length > 500 ? "..." : ""}\n\nI'll retrieve this automatically when conversations are relevant to its content.`
+    });
+
+    console.log(`discord: added reference "${title}" id=${ref.id}`);
+  } catch (err) {
+    console.error("discord: error adding reference:", err);
+    await message.reply({ content: "failed to save reference" });
+  }
 }
 
 /**
@@ -1856,6 +1956,48 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       }
     }
 
+    // Check for reference management commands
+    const refCmd = parseReferenceCommand(text);
+    if (refCmd) {
+      switch (refCmd.action) {
+        case "list": {
+          const refs = getReferences();
+          if (refs.length === 0) {
+            await message.reply({ content: "No reference documents stored yet. Attach a .md or .txt file and say `add reference [title]` to save one." });
+          } else {
+            const lines = ["**📚 Stored References:**"];
+            for (const ref of refs) {
+              const size = ref.fileSize ? ` (${Math.round(ref.fileSize / 1024)}KB)` : "";
+              const accessed = ref.accessCount > 0 ? ` · accessed ${ref.accessCount}x` : "";
+              lines.push(`• **${ref.title}**${size}${accessed}`);
+              lines.push(`  ${ref.summary.slice(0, 150)}${ref.summary.length > 150 ? "..." : ""}`);
+            }
+            await message.reply({ content: lines.join("\n").slice(0, MAX_REPLY_LENGTH) });
+          }
+          console.log(`discord: listed references from msg=${message.id}`);
+          return;
+        }
+        case "delete": {
+          if (refCmd.title) {
+            const deleted = deleteReference(refCmd.title);
+            if (deleted) {
+              await message.reply({ content: `✅ Deleted reference "${refCmd.title}".` });
+            } else {
+              await message.reply({ content: `Couldn't find reference "${refCmd.title}".` });
+            }
+            console.log(`discord: deleted reference "${refCmd.title}" from msg=${message.id}`);
+          }
+          return;
+        }
+        case "add": {
+          if (refCmd.title) {
+            await handleAddReference(message, refCmd.title);
+          }
+          return;
+        }
+      }
+    }
+
     // Check for autonomous mode commands
     const autoCmd = parseAutonomousCommand(text);
     if (autoCmd) {
@@ -2037,6 +2179,17 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
         : attachmentText;
       fullContext = `ATTACHED FILE CONTENT:\n${attachmentPreview}\n\n${fullContext}`;
       console.log(`discord: included attachment text (${attachmentText.length} chars) in context`);
+    }
+
+    // Auto-retrieve relevant references based on message content (async, semantic search)
+    // This runs in parallel while we prepare - results injected if found
+    const referenceContext = await getReferenceContext(text).catch(err => {
+      console.error("discord: error fetching reference context:", err);
+      return "";
+    });
+    if (referenceContext) {
+      fullContext = `${referenceContext}\n\n${fullContext}`;
+      console.log(`discord: injected reference context for msg=${message.id}`);
     }
 
     // Generate response (use Discord personality for operator chat)

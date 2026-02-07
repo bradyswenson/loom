@@ -29,6 +29,7 @@ The "brain" that enables coherent, non-repetitive engagement:
 | **Goals** | Active and completed goals for topic exploration, engagement, or learning. Tracks progress toward objectives |
 | **Compressed Insights** | Compressed summaries of older memories, preserving key learnings while managing memory size |
 | **Embeddings** | Vector embeddings for semantic search, enabling Loom to find related past content |
+| **References** | Long-term reference documents that don't decay, retrieved via semantic search when relevant |
 
 ### 3. Receipts (`publish-receipts.jsonl`)
 
@@ -92,7 +93,7 @@ When Loom considers making a post:
 
 ### Memory Compression
 
-To prevent unbounded growth, Loom automatically compresses old memories (older than 14 days) into weekly insights. This process:
+To prevent unbounded growth, Loom automatically compresses old memories (older than 3 days) into weekly insights. This fast decay helps Loom explore more broadly rather than getting stuck in topic gravity wells. The compression process:
 
 1. **Runs daily** during autonomous checks
 2. **Aggregates topics** from the period's posts and observations
@@ -124,6 +125,53 @@ Using OpenAI's text-embedding-3-small model, Loom indexes posts and observations
 - **Avoiding redundant content** through semantic (not just keyword) matching
 
 The semantic index is automatically populated when posts and comments are created.
+
+### Long-Term References
+
+Unlike observations and posts which decay after 3 days, **reference documents** are permanent knowledge that Loom can always access. These are designed for operator-provided context that should persist indefinitely.
+
+**Structure:**
+```typescript
+interface ReferenceDoc {
+  id: string;
+  title: string;           // Human-readable title
+  content: string;         // Full document content
+  summary: string;         // LLM-generated 200-300 word summary
+  fileName?: string;       // Original filename if from attachment
+  fileSize?: number;       // Original file size
+  addedAt: string;         // When added
+  lastAccessed?: string;   // Last retrieval
+  accessCount: number;     // How many times retrieved
+}
+```
+
+**How it works:**
+1. Operator attaches a `.md` or `.txt` file and says `add reference "Title"`
+2. Loom generates a 200-300 word summary capturing topic, key points, conclusions
+3. The full document + summary are embedded using text-embedding-3-small
+4. On every message, Loom searches references by semantic similarity
+5. Relevant documents (>55% similarity) are automatically injected into context
+
+**Discord commands:**
+- `add reference [title]` + attachment — save document for semantic recall
+- `list references` — show all stored references with summaries and access counts
+- `delete reference [title]` — remove a reference
+
+**Key differences from observations:**
+| Aspect | Observations | References |
+|--------|--------------|------------|
+| Decay | Compressed after 3 days | Never decays |
+| Max count | 100 | 50 |
+| Content | Loom's thoughts/reasoning | Operator-provided documents |
+| Retrieval | Part of general context | Semantic search per message |
+| Purpose | Audit trail, recent thinking | Persistent knowledge base |
+
+**Use cases:**
+- Project documentation Loom should always know about
+- Technical specs or architecture decisions
+- Policy documents or guidelines
+- Research summaries the operator wants Loom to reference
+- Any context that shouldn't fade with time
 
 ### Context Window Management
 
