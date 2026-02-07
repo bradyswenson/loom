@@ -35,6 +35,7 @@ export interface GenerateOptions {
   conversationContext?: string; // Recent messages for context
   maxTokens?: number;
   useDiscordPrompt?: boolean; // Use DISCORD.md personality for operator chat
+  simpleMode?: boolean; // Use minimal system prompt for utility tasks (summaries, etc.)
 }
 
 export interface GenerateResult {
@@ -51,7 +52,12 @@ export interface GenerateResult {
 export async function generate(options: GenerateOptions): Promise<GenerateResult> {
   const provider = getProvider();
   const model = getModel(provider);
-  const systemPrompt = options.useDiscordPrompt ? getDiscordSystemPrompt() : getSystemPrompt();
+  // Use minimal system prompt for utility tasks, or full doctrine for conversations
+  const systemPrompt = options.simpleMode
+    ? "You are a helpful assistant. Complete the task directly and concisely."
+    : options.useDiscordPrompt
+    ? getDiscordSystemPrompt()
+    : getSystemPrompt();
   const maxTokens = options.maxTokens ?? 4096;
 
   // Build user message with optional context

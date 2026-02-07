@@ -194,7 +194,7 @@ ${attachment.text}
 Remember: Be specific and concrete. Include actual names, numbers, and details from the document.`;
 
   try {
-    const result = await generate({ userMessage: prompt, maxTokens: 600 });
+    const result = await generate({ userMessage: prompt, maxTokens: 600, simpleMode: true });
     const summary = result.text?.trim();
 
     if (!summary || summary.length < 50) {
@@ -993,10 +993,13 @@ DOCUMENT:
 ${attachmentResult.text}`;
 
   try {
-    const result = await generate({ userMessage: summaryPrompt, maxTokens: 600 });
+    console.log(`discord: generating summary for reference, document length=${attachmentResult.text.length} chars`);
+    const result = await generate({ userMessage: summaryPrompt, maxTokens: 600, simpleMode: true });
     const summary = result.text?.trim();
+    console.log(`discord: summary result length=${summary?.length || 0}, inputTokens=${result.inputTokens}, outputTokens=${result.outputTokens}`);
 
     if (!summary || summary.length < 50) {
+      console.log(`discord: summary too short or empty: "${summary?.slice(0, 100)}"`);
       await message.reply({ content: "couldn't generate a good summary for this document" });
       return;
     }
