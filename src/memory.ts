@@ -869,7 +869,7 @@ export function getObservationsContext(limit: number = 10): string {
 // MEMORY DECAY/COMPRESSION SYSTEM
 // ==========================================
 
-const COMPRESSION_AGE_DAYS = 14;  // Compress memories older than 2 weeks
+const COMPRESSION_AGE_DAYS = 3;  // Compress memories older than 3 days (fast-moving network)
 const MAX_COMPRESSED_INSIGHTS = 24; // ~2 years of monthly compressions
 
 /**

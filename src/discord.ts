@@ -280,7 +280,7 @@ function formatCommandsHelp(): string {
 📝 **Moltbook**
 • \`post to moltbook about [topic]\` — create a new post
 • \`read post [id]\` — fetch and display a post
-• \`comment on [url]\` — comment on a specific post by URL
+• \`comment on [uuid]\` — comment on a post (e.g. comment on 8a828f9f-...)
 
 🌐 **Dashboard**
 • Visit https://loom-v3.fly.dev/dashboard for the web UI
@@ -828,32 +828,19 @@ async function handleReadPost(message: Message, postId: string): Promise<void> {
  */
 function extractCommentOnPostRequest(text: string): { postId: string; guidance?: string } | null {
   // Match patterns like:
-  // - "comment on https://www.moltbook.com/post/abc123"
-  // - "reply to https://www.moltbook.com/post/abc123"
-  // - "comment on post abc123"
-  // - "comment on https://... about X" (with guidance)
+  // - "comment on 8a828f9f-75e5-428c-b9bd-827f4c952986" (UUID)
+  // - "reply to 8a828f9f-75e5-428c-b9bd-827f4c952986"
+  // - "comment on 8a828f9f-... about Lightning Network" (with guidance)
 
-  const urlPattern = /(?:comment|reply|respond)\s+(?:on|to)\s+(?:this\s+)?(?:post\s+)?https?:\/\/(?:www\.)?moltbook\.com\/post\/([a-f0-9-]+)/i;
-  const idPattern = /(?:comment|reply|respond)\s+(?:on|to)\s+(?:this\s+)?post\s+([a-f0-9-]{8,})/i;
+  const uuidPattern = /(?:comment|reply|respond)\s+(?:on|to)\s+([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
 
-  let postId: string | null = null;
-  let matchEnd = 0;
+  const match = text.match(uuidPattern);
+  if (!match) return null;
 
-  const urlMatch = text.match(urlPattern);
-  if (urlMatch) {
-    postId = urlMatch[1];
-    matchEnd = urlMatch.index! + urlMatch[0].length;
-  } else {
-    const idMatch = text.match(idPattern);
-    if (idMatch) {
-      postId = idMatch[1];
-      matchEnd = idMatch.index! + idMatch[0].length;
-    }
-  }
+  const postId = match[1];
+  const matchEnd = match.index! + match[0].length;
 
-  if (!postId) return null;
-
-  // Extract optional guidance after the URL/ID
+  // Extract optional guidance after the UUID
   const remaining = text.slice(matchEnd).trim();
   const guidanceMatch = remaining.match(/^(?:about|regarding|re:|on|with)?\s*(.+)/i);
   const guidance = guidanceMatch?.[1]?.trim() || undefined;
@@ -1724,17 +1711,17 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       }
     }
 
+    // Check for comment-on-post request FIRST (before read, since read pattern is broad)
+    const commentRequest = extractCommentOnPostRequest(text);
+    if (commentRequest) {
+      await handleCommentOnPost(message, commentRequest.postId, commentRequest.guidance);
+      return;
+    }
+
     // Check for read post request
     const readPostId = extractReadPostRequest(text);
     if (readPostId) {
       await handleReadPost(message, readPostId);
-      return;
-    }
-
-    // Check for comment-on-post request
-    const commentRequest = extractCommentOnPostRequest(text);
-    if (commentRequest) {
-      await handleCommentOnPost(message, commentRequest.postId, commentRequest.guidance);
       return;
     }
 
