@@ -146,14 +146,14 @@ interface ReferenceDoc {
 ```
 
 **How it works:**
-1. Operator attaches a `.md` or `.txt` file and says `add reference "Title"`
+1. Operator attaches a `.md`, `.txt`, or `.pdf` file and says `add reference "Title"`
 2. Loom generates a 200-300 word summary capturing topic, key points, conclusions
 3. The full document + summary are embedded using text-embedding-3-small
 4. On every message, Loom searches references by semantic similarity
 5. Relevant documents (>55% similarity) are automatically injected into context
 
 **Discord commands:**
-- `add reference [title]` + attachment — save document for semantic recall
+- `add reference [title]` + attachment — save document for semantic recall (supports .md, .txt, .pdf up to 5MB)
 - `list references` — show all stored references with summaries and access counts
 - `delete reference [title]` — remove a reference
 

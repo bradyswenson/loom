@@ -4,6 +4,8 @@
  */
 
 import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder } from "discord.js";
+// @ts-ignore - pdf-parse doesn't have types
+import pdfParse from "pdf-parse";
 import { generate } from "./llm.js";
 import { createPost, createComment, getFeed, getPost, getComments, getSubmolts, validateSubmolt, isConfigured as moltbookConfigured, type MoltbookPost } from "./moltbook.js";
 import {
@@ -64,6 +66,7 @@ const MAX_REPLY_LENGTH = 1900; // Discord limit is 2000, leave room for safety
 const RECENT_MESSAGE_WINDOW = 6;
 const MAX_CONTEXT_MSG_LENGTH = 200;
 const MAX_ATTACHMENT_SIZE = 50000; // 50KB max for text attachments
+const MAX_PDF_SIZE = 5000000; // 5MB max for PDF attachments
 
 // Common topics to look for in conversations
 const TOPIC_KEYWORDS = [
@@ -101,7 +104,7 @@ interface AttachmentResult {
 
 /**
  * Extract text content from message attachments.
- * Supports .md, .txt, and other text files.
+ * Supports .md, .txt, .pdf, and other text files.
  * Returns text content along with file metadata.
  */
 async function extractAttachmentText(message: Message): Promise<AttachmentResult | null> {
@@ -115,9 +118,16 @@ async function extractAttachmentText(message: Message): Promise<AttachmentResult
   for (const attachment of attachments) {
     const name = attachment.name?.toLowerCase() || "";
     const isTextFile = textExtensions.some(ext => name.endsWith(ext));
+    const isPdf = name.endsWith(".pdf");
 
-    if (!isTextFile) continue;
-    if (attachment.size > MAX_ATTACHMENT_SIZE) {
+    if (!isTextFile && !isPdf) continue;
+
+    // Check size limits
+    if (isPdf && attachment.size > MAX_PDF_SIZE) {
+      console.log(`discord: PDF ${attachment.name} too large (${attachment.size} bytes, max ${MAX_PDF_SIZE})`);
+      continue;
+    }
+    if (!isPdf && attachment.size > MAX_ATTACHMENT_SIZE) {
       console.log(`discord: attachment ${attachment.name} too large (${attachment.size} bytes)`);
       continue;
     }
@@ -128,15 +138,33 @@ async function extractAttachmentText(message: Message): Promise<AttachmentResult
         console.error(`discord: failed to fetch attachment ${attachment.name}: ${response.status}`);
         continue;
       }
-      const text = await response.text();
-      console.log(`discord: extracted ${text.length} chars from attachment ${attachment.name}`);
+
+      let text: string;
+
+      if (isPdf) {
+        // Parse PDF to extract text
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const pdfData = await pdfParse(buffer);
+        text = pdfData.text || "";
+        console.log(`discord: extracted ${text.length} chars from PDF ${attachment.name} (${pdfData.numpages} pages)`);
+      } else {
+        // Plain text file
+        text = await response.text();
+        console.log(`discord: extracted ${text.length} chars from attachment ${attachment.name}`);
+      }
+
+      if (!text || text.trim().length === 0) {
+        console.log(`discord: attachment ${attachment.name} has no extractable text`);
+        continue;
+      }
+
       return {
         text,
         fileName: attachment.name || "unknown",
         fileSize: attachment.size,
       };
     } catch (err) {
-      console.error(`discord: error fetching attachment ${attachment.name}:`, err);
+      console.error(`discord: error processing attachment ${attachment.name}:`, err);
     }
   }
 
@@ -547,7 +575,7 @@ function formatCommandsHelp(): string {
 • \`comment on [uuid]\` — comment on a post (e.g. comment on 8a828f9f-...)
 
 📚 **Long-Term References**
-• \`add reference [title]\` + attachment — save document for semantic recall
+• \`add reference [title]\` + attachment — save document for semantic recall (supports .md, .txt, .pdf)
 • \`list references\` — show all stored reference documents
 • \`delete reference [title]\` — remove a reference
 
@@ -945,7 +973,7 @@ async function handleAddReference(message: Message, title: string): Promise<void
   const attachmentResult = await extractAttachmentText(message);
 
   if (!attachmentResult) {
-    await message.reply({ content: "attach a .md or .txt file to save as a reference" });
+    await message.reply({ content: "attach a .md, .txt, or .pdf file to save as a reference" });
     return;
   }
 
