@@ -4,8 +4,10 @@
  */
 
 import { Client, GatewayIntentBits, Message, Partials, AttachmentBuilder } from "discord.js";
-// @ts-ignore - pdf-parse doesn't have types
-import pdfParse from "pdf-parse";
+// Use createRequire for CommonJS module that doesn't support ESM
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
 import { generate } from "./llm.js";
 import { createPost, createComment, getFeed, getPost, getComments, getSubmolts, validateSubmolt, isConfigured as moltbookConfigured, type MoltbookPost } from "./moltbook.js";
 import {
