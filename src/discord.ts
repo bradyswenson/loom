@@ -87,10 +87,20 @@ function extractTopicsFromText(text: string): string[] {
 }
 
 /**
+ * Attachment extraction result with metadata.
+ */
+interface AttachmentResult {
+  text: string;
+  fileName: string;
+  fileSize: number;
+}
+
+/**
  * Extract text content from message attachments.
  * Supports .md, .txt, and other text files.
+ * Returns text content along with file metadata.
  */
-async function extractAttachmentText(message: Message): Promise<string | null> {
+async function extractAttachmentText(message: Message): Promise<AttachmentResult | null> {
   if (!message.attachments || message.attachments.size === 0) {
     return null;
   }
@@ -116,13 +126,65 @@ async function extractAttachmentText(message: Message): Promise<string | null> {
       }
       const text = await response.text();
       console.log(`discord: extracted ${text.length} chars from attachment ${attachment.name}`);
-      return text;
+      return {
+        text,
+        fileName: attachment.name || "unknown",
+        fileSize: attachment.size,
+      };
     } catch (err) {
       console.error(`discord: error fetching attachment ${attachment.name}:`, err);
     }
   }
 
   return null;
+}
+
+/**
+ * Generate a comprehensive summary of an attachment and store it as an observation.
+ * Summary is 200-300 words capturing topic, key points, conclusions, and action items.
+ */
+async function summarizeAndStoreAttachment(
+  attachment: AttachmentResult
+): Promise<void> {
+  const prompt = `Summarize this document in 200-300 words. Be specific and include concrete details, names, and numbers rather than vague descriptions.
+
+Structure your summary as follows:
+1. **Topic**: What is this document about? (1-2 sentences)
+2. **Key Points**: What are the main arguments, findings, or information? (3-5 sentences)
+3. **Conclusions/Takeaways**: What's the bottom line, recommendation, or key insight? (2-3 sentences)
+4. **Action Items**: Any next steps, open questions, or things to follow up on? (1-2 sentences, or "None mentioned" if not applicable)
+
+DOCUMENT CONTENT:
+${attachment.text}
+
+Remember: Be specific and concrete. Include actual names, numbers, and details from the document.`;
+
+  try {
+    const result = await generate({ userMessage: prompt, maxTokens: 600 });
+    const summary = result.text?.trim();
+
+    if (!summary || summary.length < 50) {
+      console.log(`discord: failed to generate meaningful summary for ${attachment.fileName}`);
+      return;
+    }
+
+    // Extract topics from the document
+    const topics = extractTopicsFromText(attachment.text);
+
+    // Format the observation note
+    const note = `Operator shared file "${attachment.fileName}" (${Math.round(attachment.fileSize / 1024)}KB):\n\n${summary}`;
+
+    // Store as observation
+    recordObservation("file_shared", note, {
+      topics,
+      fileName: attachment.fileName,
+      fileSize: attachment.fileSize,
+    });
+
+    console.log(`discord: stored attachment summary for ${attachment.fileName} (${summary.length} chars)`);
+  } catch (err) {
+    console.error(`discord: error summarizing attachment ${attachment.fileName}:`, err);
+  }
 }
 
 /**
@@ -1934,7 +1996,15 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
     const context = await buildContext(channel, message.id);
 
     // Extract any text from attachments (for posting .md files etc)
-    const attachmentText = await extractAttachmentText(message);
+    const attachmentResult = await extractAttachmentText(message);
+    const attachmentText = attachmentResult?.text || null;
+
+    // If we have an attachment, generate summary and store in memory (async, don't block)
+    if (attachmentResult) {
+      summarizeAndStoreAttachment(attachmentResult).catch(err => {
+        console.error("discord: failed to summarize attachment:", err);
+      });
+    }
 
     // Check if this is a Moltbook post request
     if (isMoltbookPostRequest(text)) {

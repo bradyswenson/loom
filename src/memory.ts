@@ -58,7 +58,8 @@ export type ObservationType =
   | "downvote_justification" // Reasoning behind a downvote
   | "insight"              // Pattern or insight noticed during browsing
   | "thread_limit"         // Hit per-thread engagement limit
-  | "operator_conversation"; // Conversation with operator worth remembering
+  | "operator_conversation" // Conversation with operator worth remembering
+  | "file_shared";         // Operator shared a file attachment
 
 export interface Observation {
   id: string;
@@ -75,6 +76,9 @@ export interface Observation {
   topics: string[];              // Related topics
   actionTaken?: string;          // For justifications: "post", "comment", "vote_up", "vote_down"
   contentPreview?: string;       // Preview of what was posted/commented
+  // File attachment fields (for file_shared type)
+  fileName?: string;             // Original filename
+  fileSize?: number;             // Size in bytes
 }
 
 // ===== NEW: Goal-Oriented Memory =====
@@ -745,6 +749,9 @@ export function recordObservation(
     topics?: string[];
     actionTaken?: string;
     contentPreview?: string;
+    // File attachment fields
+    fileName?: string;
+    fileSize?: number;
   }
 ): void {
   const memory = readMemory();
@@ -770,6 +777,8 @@ export function recordObservation(
     topics: extractedTopics,
     actionTaken: opts.actionTaken,
     contentPreview: opts.contentPreview,
+    fileName: opts.fileName,
+    fileSize: opts.fileSize,
   };
 
   memory.observations = memory.observations || [];
