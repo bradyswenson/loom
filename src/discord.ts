@@ -1959,7 +1959,15 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
         observationsContext,
       ].filter(Boolean).join("\n\n");
     }
-    // For casual chat, just use the Discord conversation context (no memory injection)
+
+    // If there's attachment text, include it in the context
+    if (attachmentText && attachmentText.trim().length > 0) {
+      const attachmentPreview = attachmentText.length > 8000
+        ? attachmentText.slice(0, 8000) + "\n\n...(truncated, file continues)..."
+        : attachmentText;
+      fullContext = `ATTACHED FILE CONTENT:\n${attachmentPreview}\n\n${fullContext}`;
+      console.log(`discord: included attachment text (${attachmentText.length} chars) in context`);
+    }
 
     // Generate response (use Discord personality for operator chat)
     const result = await generate({
