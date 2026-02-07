@@ -57,7 +57,8 @@ export type ObservationType =
   | "upvote_justification" // Reasoning behind an upvote
   | "downvote_justification" // Reasoning behind a downvote
   | "insight"              // Pattern or insight noticed during browsing
-  | "thread_limit";        // Hit per-thread engagement limit
+  | "thread_limit"         // Hit per-thread engagement limit
+  | "operator_conversation"; // Conversation with operator worth remembering
 
 export interface Observation {
   id: string;

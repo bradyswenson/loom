@@ -47,6 +47,7 @@ import {
   getObservationsContext,
   getEnhancedMemoryStats,
   getActiveGoals,
+  recordObservation,
 } from "./memory.js";
 import {
   initAlerts,
@@ -59,6 +60,31 @@ const MAX_REPLY_LENGTH = 1900; // Discord limit is 2000, leave room for safety
 const RECENT_MESSAGE_WINDOW = 6;
 const MAX_CONTEXT_MSG_LENGTH = 200;
 const MAX_ATTACHMENT_SIZE = 50000; // 50KB max for text attachments
+
+// Common topics to look for in conversations
+const TOPIC_KEYWORDS = [
+  "bitcoin", "crypto", "blockchain", "lightning", "wallet",
+  "agent", "autonomous", "ai", "llm", "model",
+  "supply chain", "security", "trust", "identity", "reputation",
+  "moltbook", "post", "comment", "thread",
+  "memory", "context", "prompt", "token",
+  "incentive", "governance", "norm", "policy",
+  "operator", "human", "collaboration",
+];
+
+/**
+ * Extract potential topics from text for tagging observations.
+ */
+function extractTopicsFromText(text: string): string[] {
+  const lower = text.toLowerCase();
+  const found: string[] = [];
+  for (const topic of TOPIC_KEYWORDS) {
+    if (lower.includes(topic) && !found.includes(topic)) {
+      found.push(topic);
+    }
+  }
+  return found.slice(0, 5); // Max 5 topics
+}
 
 /**
  * Extract text content from message attachments.
@@ -161,6 +187,177 @@ function extractPostTopic(text: string): string {
     .replace(/write\s+(a\s+)?moltbook\s+post\s+(about|on):?\s*/i, "")
     .trim();
   return cleaned;
+}
+
+/**
+ * Check if message is a request to post the recent conversation to Moltbook.
+ * Returns optional topic/angle guidance if provided.
+ */
+function extractPostConversationRequest(text: string): { guidance?: string } | null {
+  const patterns = [
+    /^post\s+(?:our|this|the)\s+(?:conversation|chat|discussion|exchange)(?:\s+(?:to|on)\s+moltbook)?/i,
+    /^turn\s+(?:that|this|our\s+(?:conversation|chat|discussion))\s+into\s+(?:a\s+)?(?:moltbook\s+)?post/i,
+    /^(?:make|create)\s+(?:a\s+)?(?:moltbook\s+)?post\s+(?:from|about)\s+(?:our|this|the)\s+(?:conversation|chat|discussion)/i,
+    /^moltbook\s+post\s+(?:from|about)\s+(?:our|this|the)\s+(?:conversation|chat)/i,
+    /^share\s+(?:our|this)\s+(?:conversation|chat|discussion)\s+(?:to|on|with)\s+moltbook/i,
+  ];
+
+  for (const p of patterns) {
+    if (p.test(text.trim())) {
+      // Extract any guidance after the matched pattern
+      const remaining = text.replace(p, "").trim();
+      const guidanceMatch = remaining.match(/^(?:about|regarding|re:|on|focusing on|angle:?)?\s*(.+)/i);
+      return { guidance: guidanceMatch?.[1]?.trim() || undefined };
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetch recent conversation history from a Discord channel.
+ */
+async function fetchConversationHistory(
+  channel: Message["channel"],
+  limit: number = 20
+): Promise<{ author: string; content: string; isBot: boolean }[]> {
+  try {
+    const messages = await channel.messages.fetch({ limit });
+    return [...messages.values()]
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+      .map((m) => ({
+        author: m.author.bot ? "Loom" : (m.author.displayName ?? m.author.username ?? "Operator"),
+        content: m.content,
+        isBot: m.author.bot,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Handle a request to post the recent conversation to Moltbook.
+ */
+async function handlePostConversation(message: Message, guidance?: string): Promise<void> {
+  if (!moltbookConfigured()) {
+    await message.reply({ content: "Moltbook is not configured. Set MOLTBOOK_API_KEY to enable." });
+    return;
+  }
+
+  // Check post cooldown
+  const postCooldown = checkPostCooldown();
+  if (!postCooldown.allowed) {
+    await message.reply({ content: `can't post right now: ${postCooldown.reason}` });
+    return;
+  }
+
+  await message.reply({ content: "pulling together our recent conversation..." });
+
+  // Fetch conversation history
+  const history = await fetchConversationHistory(message.channel, 25);
+
+  if (history.length < 3) {
+    await message.reply({ content: "not enough conversation to synthesize into a post" });
+    return;
+  }
+
+  // Format conversation for the LLM
+  const conversationText = history
+    .filter(m => m.content.trim().length > 0)
+    .map(m => `${m.author}: ${m.content}`)
+    .join("\n\n");
+
+  // Fetch submolts for context
+  const submoltsResult = await getSubmolts();
+  const submoltsList = submoltsResult.ok && submoltsResult.submolts?.length
+    ? submoltsResult.submolts.slice(0, 15).map(s => `- ${s.name}: ${s.description?.slice(0, 60) || "(no description)"}`).join("\n")
+    : "general, agents, bitcoin, crypto, supply-chain";
+
+  // Build prompt to synthesize conversation into a post
+  const prompt = `Your operator has asked you to turn your recent Discord conversation into a Moltbook post.
+
+CONVERSATION:
+${conversationText}
+
+${guidance ? `OPERATOR GUIDANCE: Focus on or angle towards: ${guidance}` : ""}
+
+AVAILABLE SUBMOLTS:
+${submoltsList}
+
+TASK:
+Synthesize the interesting ideas from this conversation into a standalone Moltbook post. The post should:
+1. Stand alone — readers won't have the Discord context
+2. Capture the key insight, question, or synthesis from the discussion
+3. Be in your voice (Loom), not a transcript
+4. Add value beyond just summarizing — develop the idea further
+5. Feel like a genuine post, not "here's what we discussed"
+
+Don't mention Discord, the operator, or that this came from a conversation.
+
+Format your response EXACTLY as:
+SUBMOLT: [submolt name]
+TITLE: [compelling title]
+CONTENT: [post body]`;
+
+  const result = await generate({ userMessage: prompt, maxTokens: 1500 });
+  const response = result.text;
+
+  // Parse the response
+  const submoltMatch = response.match(/SUBMOLT:\s*(.+?)(?:\n|TITLE:)/s);
+  const titleMatch = response.match(/TITLE:\s*(.+?)(?:\n|CONTENT:)/s);
+  const contentMatch = response.match(/CONTENT:\s*([\s\S]+)/);
+
+  if (!titleMatch || !contentMatch) {
+    await message.reply({ content: "couldn't synthesize a good post from our conversation" });
+    return;
+  }
+
+  const submolt = await validateSubmolt(submoltMatch?.[1]?.trim());
+  const title = titleMatch[1].trim();
+  const content = contentMatch[1].trim();
+
+  // Post to Moltbook
+  const postResult = await createPost({ title, content, submolt });
+
+  if (!postResult.ok) {
+    appendReceipt({
+      ts: new Date().toISOString(),
+      action: "post",
+      surface: "moltbook",
+      submolt,
+      title,
+      contentPreview: content.slice(0, 100),
+      success: false,
+      error: postResult.error,
+    });
+    await message.reply({ content: `failed to post: ${postResult.error}` });
+    return;
+  }
+
+  // Record success
+  recordPostState();
+  const postId = postResult.post?.id;
+  const postUrl = postId ? `https://www.moltbook.com/post/${postId}` : null;
+
+  if (postId) {
+    await recordPostMemory(postId, title, content, submolt, false);
+  }
+
+  appendReceipt({
+    ts: new Date().toISOString(),
+    action: "post",
+    surface: "moltbook",
+    postId,
+    submolt,
+    title,
+    contentPreview: content.slice(0, 100),
+    success: true,
+  });
+
+  console.log(`discord: posted conversation synthesis id=${postId} submolt=${submolt}`);
+
+  await message.reply({
+    content: `done — synthesized our chat into a post:\n\n**${title}**\n\n${content.slice(0, 400)}${content.length > 400 ? "..." : ""}\n\n${postUrl ?? "(no URL)"}`
+  });
 }
 
 /**
@@ -279,6 +476,7 @@ function formatCommandsHelp(): string {
 
 📝 **Moltbook**
 • \`post to moltbook about [topic]\` — create a new post
+• \`post our conversation\` — turn recent chat into a Moltbook post
 • \`read post [id]\` — fetch and display a post
 • \`comment on [uuid]\` — comment on a post (e.g. comment on 8a828f9f-...)
 
@@ -1725,6 +1923,13 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
       return;
     }
 
+    // Check for "post our conversation" request
+    const conversationPostRequest = extractPostConversationRequest(text);
+    if (conversationPostRequest) {
+      await handlePostConversation(message, conversationPostRequest.guidance);
+      return;
+    }
+
     // Build context
     const context = await buildContext(channel, message.id);
 
@@ -1783,6 +1988,18 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
     }
 
     console.log(`discord: replied msg=${message.id} provider=${result.provider} tokens=${result.outputTokens ?? "?"}`);
+
+    // Record substantive conversations as observations for memory
+    // Only record if both message and reply have real content (not just "hi" / "hey")
+    const MIN_CONVERSATION_LENGTH = 100; // Combined length threshold
+    const combinedLength = text.length + reply.length;
+    if (combinedLength > MIN_CONVERSATION_LENGTH && reply.length > 30) {
+      const conversationNote = `Operator: ${text.slice(0, 500)}${text.length > 500 ? "..." : ""}\n\nLoom: ${reply.slice(0, 500)}${reply.length > 500 ? "..." : ""}`;
+      recordObservation("operator_conversation", conversationNote, {
+        topics: extractTopicsFromText(text + " " + reply),
+      });
+      console.log(`discord: recorded conversation as observation (${combinedLength} chars)`);
+    }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? err.stack : "";
