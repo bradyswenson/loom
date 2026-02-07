@@ -808,6 +808,23 @@ export function getObservationsByType(type: ObservationType, limit: number = 10)
 }
 
 /**
+ * Delete an observation by ID.
+ * Returns true if deleted, false if not found.
+ */
+export function deleteObservation(observationId: string): boolean {
+  const memory = readMemory();
+  const initialLength = (memory.observations || []).length;
+  memory.observations = (memory.observations || []).filter(o => o.id !== observationId);
+
+  if (memory.observations.length < initialLength) {
+    writeMemory(memory);
+    console.log(`memory: deleted observation id=${observationId}`);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Get observations context for autonomous browsing.
  * Groups by type for clearer context.
  */

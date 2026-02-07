@@ -4,7 +4,7 @@
  */
 
 import http from "http";
-import { readMemory, getMemoryStats, getReputationStats, getEnhancedMemoryStats, getActiveGoals, type LoomMemory, type Goal } from "./memory.js";
+import { readMemory, getMemoryStats, getReputationStats, getEnhancedMemoryStats, getActiveGoals, deleteObservation, type LoomMemory, type Goal } from "./memory.js";
 import { getStateStatus, getRecentReceipts } from "./state.js";
 import { getAutonomousStatus } from "./autonomous.js";
 import { getDoctrineMetadata } from "./doctrine.js";
@@ -263,6 +263,17 @@ function getDashboardHTML(): string {
     }
     .memory-item-title { font-weight: 500; margin-bottom: 4px; }
     .memory-item-meta { font-size: 0.8rem; color: #6e7681; }
+    .delete-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      opacity: 0.5;
+      font-size: 0.9rem;
+      padding: 0 4px;
+      transition: opacity 0.2s;
+    }
+    .delete-btn:hover { opacity: 1; }
+    .tag.type { background: #1f1d2e; color: #c4a7e7; }
 
     /* Stats */
     .stats-grid {
@@ -602,17 +613,36 @@ function getDashboardHTML(): string {
       }
       let html = '<div class="memory-list">';
       observations.slice().reverse().forEach(o => {
-        html += \`<div class="memory-item">
+        html += \`<div class="memory-item" id="obs-\${o.id}">
           <div class="memory-item-title">\${escapeHtml(o.note)}</div>
           <div class="memory-item-meta">
+            <span class="tag type">\${o.type}</span> ·
             \${o.postTitle ? \`Re: \${escapeHtml(o.postTitle)} · \` : ''}
             \${timeAgo(o.ts)}
             \${o.postId ? \` · <a href="https://www.moltbook.com/post/\${o.postId}" target="_blank">View post</a>\` : ''}
+            · <button class="delete-btn" onclick="deleteObs('\${o.id}')" title="Delete observation">🗑️</button>
           </div>
         </div>\`;
       });
       html += '</div>';
       panel.innerHTML = html;
+    }
+
+    // Delete observation
+    async function deleteObs(obsId) {
+      if (!confirm('Delete this observation?')) return;
+      try {
+        const res = await fetch('/api/observation/' + encodeURIComponent(obsId), { method: 'DELETE' });
+        if (res.ok) {
+          const el = document.getElementById('obs-' + obsId);
+          if (el) el.remove();
+        } else {
+          alert('Failed to delete observation');
+        }
+      } catch (err) {
+        console.error('Delete error:', err);
+        alert('Failed to delete observation');
+      }
     }
 
     // Escape HTML
@@ -1200,6 +1230,21 @@ export function handleDashboardRequest(
     } else {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Entry not found" }));
+    }
+    return true;
+  }
+
+  // API: Delete observation by ID
+  const observationMatch = url.pathname.match(/^\/api\/observation\/(.+)$/);
+  if (observationMatch && req.method === "DELETE") {
+    const observationId = decodeURIComponent(observationMatch[1]);
+    const deleted = deleteObservation(observationId);
+    if (deleted) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true, id: observationId }));
+    } else {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Observation not found" }));
     }
     return true;
   }
