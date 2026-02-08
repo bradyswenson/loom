@@ -88,8 +88,9 @@ function searchMemory(memory: LoomMemory, query: string): {
   threads: typeof memory.threads;
 } {
   const q = query.toLowerCase();
+  const entries = memory.entries || [];
 
-  const posts = memory.entries.filter(
+  const posts = entries.filter(
     (e) =>
       e.type === "post" &&
       (e.title?.toLowerCase().includes(q) ||
@@ -98,7 +99,7 @@ function searchMemory(memory: LoomMemory, query: string): {
         e.topics?.some((t) => t.toLowerCase().includes(q)))
   );
 
-  const comments = memory.entries.filter(
+  const comments = entries.filter(
     (e) =>
       e.type === "comment" &&
       (e.summary?.toLowerCase().includes(q) ||
@@ -108,7 +109,7 @@ function searchMemory(memory: LoomMemory, query: string): {
 
   const observations = (memory.observations || []).filter(
     (o) =>
-      o.note.toLowerCase().includes(q) ||
+      o.note?.toLowerCase().includes(q) ||
       o.postTitle?.toLowerCase().includes(q) ||
       o.topics?.some((t) => t.toLowerCase().includes(q))
   );
