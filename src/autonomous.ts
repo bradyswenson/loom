@@ -674,8 +674,9 @@ VOTE_POST_ID: [id of the post]
 VOTE_POST_TITLE: [title of the post]
 JUSTIFICATION: [1-2 sentences: what makes this post low quality or harmful to discourse?]
 
-To observe (capture your thinking for later!):
+To observe (capture your thinking with optional web research):
 ACTION: OBSERVE
+RESEARCH: [optional: search query to learn more about what you're observing]
 REASON: [why not acting now]
 INSIGHT: [what patterns you notice, what's interesting, what you might follow up on later]
 ABOUT_POST_ID: [id of most interesting post]
@@ -701,41 +702,8 @@ ABOUT_SUBMOLT: [submolt]`;
     } else if (decision.action === "vote_up" || decision.action === "vote_down") {
       await executeVote(decision, posts);
     } else {
-      // Observe - record Loom's thinking as an observation
-      consecutiveAbstains++;
-      const receipt: PublishReceipt = {
-        ts: new Date().toISOString(),
-        action: "abstain",
-        success: true,
-        reason: decision.reason || "Autonomous observation",
-        autonomous: true,
-      };
-      appendReceipt(receipt);
-      console.log(`autonomous: Observing - ${decision.reason || "no specific reason"}`);
-
-      // Record the observation/insight to memory
-      const observedPost = decision.observePostId
-        ? posts.find(p => p.id === decision.observePostId)
-        : undefined;
-
-      // Determine observation type: if there's an insight about the feed, it's an "insight"
-      // If it's just a reason for not acting, it's an "abstain"
-      const hasInsight = decision.observation && decision.observation.length > 20;
-      const observationType: ObservationType = hasInsight ? "insight" : "abstain";
-
-      // Combine reason and observation for richer context
-      const note = hasInsight && decision.observation
-        ? decision.observation
-        : (decision.reason || "Nothing compelling enough to act on right now.");
-
-      recordObservation(observationType, note, {
-        postId: decision.observePostId,
-        postTitle: decision.observePostTitle,
-        postAuthor: decision.observePostAuthor || observedPost?.author,
-        submolt: decision.observeSubmolt || (typeof observedPost?.submolt === "string" ? observedPost.submolt : undefined),
-        upvotes: observedPost?.upvotes,
-        commentCount: observedPost?.comment_count,
-      });
+      // Observe - record Loom's thinking as an observation (with optional web research)
+      await executeObserve(decision, posts);
     }
   } catch (err) {
     console.error("autonomous: Error during check:", err);
@@ -1039,6 +1007,121 @@ async function executeVote(decision: AutonomousDecision, posts: MoltbookPost[]):
       .catch(err => console.error("autonomous: Failed to send action alert:", err));
   } else {
     console.error(`autonomous: Failed to ${voteLabel}: ${result.error}`);
+  }
+}
+
+/**
+ * Execute an observe action with optional web research.
+ */
+async function executeObserve(decision: AutonomousDecision, posts: MoltbookPost[]): Promise<void> {
+  consecutiveAbstains++;
+
+  const receipt: PublishReceipt = {
+    ts: new Date().toISOString(),
+    action: "abstain",
+    success: true,
+    reason: decision.reason || "Autonomous observation",
+    autonomous: true,
+  };
+  appendReceipt(receipt);
+
+  // Record the observation/insight to memory
+  const observedPost = decision.observePostId
+    ? posts.find(p => p.id === decision.observePostId)
+    : undefined;
+
+  // Determine observation type: if there's an insight about the feed, it's an "insight"
+  // If it's just a reason for not acting, it's an "abstain"
+  const hasInsight = decision.observation && decision.observation.length > 20;
+  const observationType: ObservationType = hasInsight ? "insight" : "abstain";
+
+  // Base observation note
+  let note = hasInsight && decision.observation
+    ? decision.observation
+    : (decision.reason || "Nothing compelling enough to act on right now.");
+
+  // If research was requested, enhance the observation with web context
+  let webSources: string[] = [];
+  if (decision.researchQuery && webConfigured()) {
+    console.log(`autonomous: Researching "${decision.researchQuery}" for observation...`);
+    const searchResult = await webSearch(decision.researchQuery, 5);
+
+    if (searchResult.ok && searchResult.results.length > 0) {
+      // Enhance the observation with research findings
+      const enhancedNote = await enhanceObservationWithResearch(
+        note,
+        decision.researchQuery,
+        searchResult.results
+      );
+      if (enhancedNote) {
+        note = enhancedNote;
+      }
+
+      // Collect source URLs
+      webSources = searchResult.results.slice(0, 3).map(r => r.url);
+      console.log(`autonomous: Enhanced observation with ${webSources.length} sources`);
+    }
+  }
+
+  // Append source links to the note if we have them
+  if (webSources.length > 0) {
+    note += `\n\nSources:\n${webSources.map(url => `• ${url}`).join("\n")}`;
+  }
+
+  console.log(`autonomous: Observing${webSources.length > 0 ? " (with web research)" : ""} - ${decision.reason || "no specific reason"}`);
+
+  recordObservation(observationType, note, {
+    postId: decision.observePostId,
+    postTitle: decision.observePostTitle,
+    postAuthor: decision.observePostAuthor || observedPost?.author,
+    submolt: decision.observeSubmolt || (typeof observedPost?.submolt === "string" ? observedPost.submolt : undefined),
+    upvotes: observedPost?.upvotes,
+    commentCount: observedPost?.comment_count,
+    webSources: webSources.length > 0 ? webSources : undefined,
+  });
+}
+
+/**
+ * Enhance an observation with web research results.
+ */
+async function enhanceObservationWithResearch(
+  originalNote: string,
+  query: string,
+  searchResults: SearchResult[]
+): Promise<string | null> {
+  // Format search results as context
+  const webContext = searchResults.map(r =>
+    `- ${r.title}: ${r.snippet}\n  Source: ${r.url}`
+  ).join("\n");
+
+  const prompt = `You are recording an observation about something you noticed while browsing Moltbook.
+
+YOUR ORIGINAL OBSERVATION:
+${originalNote}
+
+WEB RESEARCH ON "${query}":
+${webContext}
+
+TASK: Enhance your observation by incorporating relevant facts from the web research. Add context that deepens your understanding or provides useful background. Keep your original insight but make it more informed.
+
+Write only the enhanced observation (2-4 sentences, no preamble):`;
+
+  try {
+    const result = await generate({
+      userMessage: prompt,
+      maxTokens: 400,
+      simpleMode: true,
+    });
+
+    const enhanced = result.text?.trim();
+    if (enhanced && enhanced.length > 30) {
+      return enhanced;
+    }
+
+    return null;
+  } catch (err) {
+    console.error("autonomous: Error enhancing observation with research:", err);
+    return null;
   }
 }
 

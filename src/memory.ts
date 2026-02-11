@@ -79,6 +79,8 @@ export interface Observation {
   // File attachment fields (for file_shared type)
   fileName?: string;             // Original filename
   fileSize?: number;             // Size in bytes
+  // Web research fields
+  webSources?: string[];         // URLs of sources used to inform the observation
 }
 
 // ===== NEW: Goal-Oriented Memory =====
@@ -767,6 +769,8 @@ export function recordObservation(
     // File attachment fields
     fileName?: string;
     fileSize?: number;
+    // Web research fields
+    webSources?: string[];
   }
 ): void {
   const memory = readMemory();
@@ -794,6 +798,7 @@ export function recordObservation(
     contentPreview: opts.contentPreview,
     fileName: opts.fileName,
     fileSize: opts.fileSize,
+    webSources: opts.webSources,
   };
 
   memory.observations = memory.observations || [];

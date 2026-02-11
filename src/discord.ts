@@ -551,61 +551,25 @@ function isCommandsRequest(text: string): boolean {
 function formatCommandsHelp(): string {
   return `**Loom Commands**
 
-📊 **Status & Reports**
-• \`status\` — cooldowns, limits, autonomous mode, memory, alerts
-• \`memory\` — posts, comments, threads, observations
-• \`activity\` — recent publish receipts
-• \`commands\` — this help message
+📊 **Status** — \`status\`, \`memory\`, \`activity\`
 
-🤖 **Autonomous Mode**
-• \`start autonomous\` — enable autonomous browsing
-• \`stop autonomous\` — disable autonomous browsing
-• \`check moltbook\` — trigger immediate check
-• \`set interval [N]\` — set check interval (minutes)
+🤖 **Autonomous** — \`start/stop autonomous\`, \`check moltbook\`, \`set interval [N]\`
 
-🎯 **Topic Directives**
-• \`look for [topic]\` — watch for a topic (observations only)
-• \`look for and publish about [topic]\` — seek AND post/comment about it
-• \`focus on [topic]\` — same as publish
-• \`list focuses\` — show current watch/publish topics
-• \`clear focus [topic]\` — remove a specific focus
-• \`clear all focuses\` — remove all focus topics
-• \`block [post/topic]\` — don't engage with matching content
-• \`list blocks\` — show blocked posts/topics
+🎯 **Topics** — \`look for [topic]\`, \`focus on [topic]\`, \`list focuses\`, \`clear focus [topic]\`, \`block [post]\`, \`list blocks\`
 
-⏱️ **Cooldowns**
-• \`set post cooldown [N]h\` or \`[N]m\` — set post interval
-• \`set comment cooldown [N]m\` — set comment interval
-• \`set post limit [N]\` — daily post limit
-• \`set comment limit [N]\` — daily comment limit
-• \`reset cooldowns\` — restore defaults
+⏱️ **Cooldowns** — \`set post cooldown [N]h\`, \`set comment cooldown [N]m\`, \`set post/comment limit [N]\`, \`reset cooldowns\`
 
-🔔 **Alerts**
-• \`alerts on\` — enable operator DM alerts
-• \`alerts off\` — disable operator DM alerts
+🔔 **Alerts** — \`alerts on/off\`
 
-📝 **Moltbook**
-• \`post to moltbook about [topic]\` — create a new post
-• \`post our conversation\` — turn recent chat into a Moltbook post
-• \`read post [id]\` — fetch and display a post
-• \`comment on [uuid]\` — comment on a post (e.g. comment on 8a828f9f-...)
+📝 **Moltbook** — \`post to moltbook about [topic]\`, \`post our conversation\`, \`read post [id]\`, \`comment on [uuid]\`
 
-📚 **Long-Term References**
-• \`add reference [title]\` + attachment — save document for semantic recall (supports .md, .txt, .pdf)
-• \`list references\` — show all stored reference documents
-• \`delete reference [title]\` — remove a reference
+📚 **References** — \`add reference [title]\` + file, \`list references\`, \`delete reference [title]\`
 
-🔍 **Web Browsing**
-• \`search [query]\` — search the web (DuckDuckGo)
-• \`fetch [url]\` — read and summarize a webpage
-• \`research [topic]\` — deep research with multiple sources
+🔍 **Web** — \`search [query]\`, \`fetch [url]\`, \`research [topic]\`
 
-🌐 **Dashboard**
-• Visit https://loom-v3.fly.dev/dashboard for the web UI
+🌐 **Dashboard** — https://loom-v3.fly.dev/dashboard
 
-💬 **Chat**
-• Just talk to me naturally — I'll respond conversationally
-• Relevant references are auto-retrieved based on conversation context`;
+💬 Just talk naturally — I'll respond conversationally`;
 }
 
 /**
