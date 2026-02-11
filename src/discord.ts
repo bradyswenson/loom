@@ -63,6 +63,13 @@ import {
   isAlertsEnabled,
   getAlertStatus,
 } from "./alerts.js";
+import {
+  search as webSearch,
+  fetchUrl,
+  searchAndFetch,
+  getProviderName as getWebProvider,
+  isConfigured as webConfigured,
+} from "./web.js";
 
 const MAX_REPLY_LENGTH = 1900; // Discord limit is 2000, leave room for safety
 const RECENT_MESSAGE_WINDOW = 6;
@@ -588,6 +595,11 @@ function formatCommandsHelp(): string {
 • \`list references\` — show all stored reference documents
 • \`delete reference [title]\` — remove a reference
 
+🔍 **Web Browsing**
+• \`search [query]\` — search the web (DuckDuckGo)
+• \`fetch [url]\` — read and summarize a webpage
+• \`research [topic]\` — deep research with multiple sources
+
 🌐 **Dashboard**
 • Visit https://loom-v3.fly.dev/dashboard for the web UI
 
@@ -1026,6 +1038,162 @@ ${attachmentResult.text}`;
     console.error("discord: error adding reference:", err);
     await message.reply({ content: "failed to save reference" });
   }
+}
+
+// --- Web Commands ---
+
+/**
+ * Parse web-related commands from message text.
+ */
+function parseWebCommand(text: string): { action: "search" | "fetch" | "research"; query: string } | null {
+  // Search command: "search [query]" or "look up [query]"
+  const searchMatch = text.match(/^(?:search|look\s*up|find)\s+(.+)$/i);
+  if (searchMatch) {
+    return { action: "search", query: searchMatch[1].trim() };
+  }
+
+  // Fetch command: "fetch [url]" or "read [url]"
+  const fetchMatch = text.match(/^(?:fetch|read|get)\s+(https?:\/\/\S+)$/i);
+  if (fetchMatch) {
+    return { action: "fetch", query: fetchMatch[1].trim() };
+  }
+
+  // Research command: "research [topic]" - searches and fetches top results
+  const researchMatch = text.match(/^research\s+(.+)$/i);
+  if (researchMatch) {
+    return { action: "research", query: researchMatch[1].trim() };
+  }
+
+  return null;
+}
+
+/**
+ * Handle web search command.
+ */
+async function handleWebSearch(message: Message, query: string): Promise<void> {
+  await message.reply({ content: `🔍 searching for "${query}"...` });
+
+  const result = await webSearch(query, 5);
+
+  if (!result.ok || result.results.length === 0) {
+    await message.reply({ content: `no results found for "${query}"${result.error ? `: ${result.error}` : ""}` });
+    return;
+  }
+
+  const lines = [`**Search results for "${query}":**`, ""];
+  for (let i = 0; i < result.results.length; i++) {
+    const r = result.results[i];
+    lines.push(`${i + 1}. **${r.title}**`);
+    lines.push(`   ${r.url}`);
+    if (r.snippet) {
+      lines.push(`   ${r.snippet.slice(0, 150)}${r.snippet.length > 150 ? "..." : ""}`);
+    }
+    lines.push("");
+  }
+
+  await message.reply({ content: lines.join("\n").slice(0, MAX_REPLY_LENGTH) });
+}
+
+/**
+ * Handle URL fetch command.
+ */
+async function handleWebFetch(message: Message, url: string): Promise<void> {
+  await message.reply({ content: `📄 fetching ${url}...` });
+
+  const result = await fetchUrl(url);
+
+  if (!result.ok) {
+    await message.reply({ content: `failed to fetch: ${result.error}` });
+    return;
+  }
+
+  const title = result.title || "Untitled";
+  const text = result.text || "";
+
+  if (!text) {
+    await message.reply({ content: `fetched "${title}" but couldn't extract text content` });
+    return;
+  }
+
+  // Generate a summary if the content is long
+  if (text.length > 1500) {
+    const summaryPrompt = `Summarize this article in 2-3 paragraphs. Focus on the main points and key takeaways.
+
+ARTICLE TITLE: ${title}
+
+ARTICLE CONTENT:
+${text.slice(0, 12000)}`;
+
+    try {
+      const summaryResult = await generate({ userMessage: summaryPrompt, maxTokens: 600, simpleMode: true });
+      const summary = summaryResult.text?.trim();
+
+      if (summary) {
+        await message.reply({
+          content: `**${title}**\n${url}\n\n${summary}`.slice(0, MAX_REPLY_LENGTH)
+        });
+        return;
+      }
+    } catch (err) {
+      console.error("discord: error summarizing fetched content:", err);
+    }
+  }
+
+  // For shorter content, just show it directly
+  await message.reply({
+    content: `**${title}**\n${url}\n\n${text.slice(0, 1500)}${text.length > 1500 ? "..." : ""}`.slice(0, MAX_REPLY_LENGTH)
+  });
+}
+
+/**
+ * Handle research command - search and fetch top results for deeper analysis.
+ */
+async function handleWebResearch(message: Message, topic: string): Promise<void> {
+  await message.reply({ content: `🔬 researching "${topic}"...` });
+
+  const result = await searchAndFetch(topic, 2);
+
+  if (!result.ok || result.searchResults.length === 0) {
+    await message.reply({ content: `no results found for "${topic}"${result.error ? `: ${result.error}` : ""}` });
+    return;
+  }
+
+  // Build context from search results and fetched content
+  let context = `Research on "${topic}":\n\n`;
+
+  for (let i = 0; i < result.searchResults.length; i++) {
+    const sr = result.searchResults[i];
+    context += `Source ${i + 1}: ${sr.title}\nURL: ${sr.url}\nSnippet: ${sr.snippet}\n\n`;
+  }
+
+  for (const fetched of result.fetchedContent) {
+    if (fetched.ok && fetched.text) {
+      context += `Full content from ${fetched.title || fetched.url}:\n${fetched.text.slice(0, 5000)}\n\n`;
+    }
+  }
+
+  // Generate a synthesis
+  const synthesisPrompt = `Based on the following research, provide a concise synthesis about "${topic}". Include key facts, different perspectives if any, and your assessment. Be specific and cite sources where relevant.
+
+${context.slice(0, 12000)}`;
+
+  try {
+    const synthesisResult = await generate({ userMessage: synthesisPrompt, maxTokens: 800, simpleMode: true });
+    const synthesis = synthesisResult.text?.trim();
+
+    if (synthesis) {
+      const sources = result.searchResults.slice(0, 3).map((r, i) => `${i + 1}. ${r.url}`).join("\n");
+      await message.reply({
+        content: `**Research: ${topic}**\n\n${synthesis}\n\n**Sources:**\n${sources}`.slice(0, MAX_REPLY_LENGTH)
+      });
+      return;
+    }
+  } catch (err) {
+    console.error("discord: error synthesizing research:", err);
+  }
+
+  // Fallback: just show search results
+  await handleWebSearch(message, topic);
 }
 
 /**
@@ -2035,6 +2203,22 @@ async function handleMessage(message: Message, botUserId: string): Promise<void>
           }
           return;
         }
+      }
+    }
+
+    // Check for web commands (search, fetch, research)
+    const webCmd = parseWebCommand(text);
+    if (webCmd) {
+      switch (webCmd.action) {
+        case "search":
+          await handleWebSearch(message, webCmd.query);
+          return;
+        case "fetch":
+          await handleWebFetch(message, webCmd.query);
+          return;
+        case "research":
+          await handleWebResearch(message, webCmd.query);
+          return;
       }
     }
 

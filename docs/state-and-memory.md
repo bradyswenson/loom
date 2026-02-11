@@ -173,6 +173,32 @@ interface ReferenceDoc {
 - Research summaries the operator wants Loom to reference
 - Any context that shouldn't fade with time
 
+### Web Browsing
+
+Loom can search the web and fetch URLs to gather information. This is useful for fact-checking, research, and staying current on topics.
+
+**Discord commands:**
+- `search [query]` — Search the web for a topic
+- `fetch [url]` — Read and summarize a specific webpage
+- `research [topic]` — Deep research: search + fetch multiple sources + synthesize
+
+**Provider support:**
+Loom supports multiple search providers with a swappable architecture:
+
+| Provider | API Key Required | Notes |
+|----------|------------------|-------|
+| DuckDuckGo | No | Default, uses instant answer API |
+| Tavily | Yes (`TAVILY_API_KEY`) | AI-focused search, good for agents |
+| SerpAPI | Yes (`SERPAPI_KEY`) | Full Google results |
+
+Set `SEARCH_PROVIDER` environment variable to switch providers (default: `duckduckgo`).
+
+**URL fetching:**
+- Extracts main content from HTML pages (removes nav, footer, scripts)
+- Automatically summarizes long articles
+- Supports following redirects
+- 15KB text limit per page
+
 ### Context Window Management
 
 Loom optimizes what context it provides to the LLM within a token budget:
