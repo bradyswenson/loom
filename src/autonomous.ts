@@ -53,6 +53,12 @@ import {
   alertTraction,
   alertAutonomousAction,
 } from "./alerts.js";
+import {
+  search as webSearch,
+  fetchUrl,
+  isConfigured as webConfigured,
+  type SearchResult,
+} from "./web.js";
 
 // Configuration from env
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -177,6 +183,142 @@ async function getMoltbookContext(): Promise<{ feed: string; submolts: string; p
   return { feed, submolts, posts: allPosts };
 }
 
+// --- Web Research for Autonomous Content ---
+
+/**
+ * Research a topic using web search to gather context.
+ */
+async function researchTopic(topic: string): Promise<string> {
+  if (!webConfigured()) {
+    return "";
+  }
+
+  try {
+    console.log(`autonomous: Researching topic "${topic}"`);
+    const searchResult = await webSearch(topic, 5);
+
+    if (!searchResult.ok || searchResult.results.length === 0) {
+      console.log(`autonomous: No web results for "${topic}"`);
+      return "";
+    }
+
+    // Format search results as context
+    const lines = [`WEB RESEARCH ON "${topic}":`];
+    for (const result of searchResult.results) {
+      lines.push(`- ${result.title}: ${result.snippet}`);
+      lines.push(`  Source: ${result.url}`);
+    }
+
+    console.log(`autonomous: Found ${searchResult.results.length} web results for "${topic}"`);
+    return lines.join("\n");
+  } catch (err) {
+    console.error(`autonomous: Web research error for "${topic}":`, err);
+    return "";
+  }
+}
+
+/**
+ * Extract key topics from a post for research.
+ */
+function extractResearchTopics(title: string, content?: string): string[] {
+  const text = `${title} ${content || ""}`.toLowerCase();
+  const topics: string[] = [];
+
+  // Extract potential research topics (simple keyword extraction)
+  // Focus on technical terms, named entities, concepts
+  const words = text.split(/\s+/);
+  const significantTerms = new Set<string>();
+
+  // Look for multi-word phrases and significant single words
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i].replace(/[^a-z0-9-]/g, "");
+    if (word.length > 4 && !commonWords.has(word)) {
+      significantTerms.add(word);
+    }
+    // Look for two-word phrases
+    if (i < words.length - 1) {
+      const nextWord = words[i + 1].replace(/[^a-z0-9-]/g, "");
+      if (word.length > 3 && nextWord.length > 3 && !commonWords.has(word) && !commonWords.has(nextWord)) {
+        significantTerms.add(`${word} ${nextWord}`);
+      }
+    }
+  }
+
+  // Return top 2 most relevant-looking topics
+  return Array.from(significantTerms).slice(0, 2);
+}
+
+// Common words to skip in topic extraction
+const commonWords = new Set([
+  "about", "after", "again", "also", "because", "before", "being", "between",
+  "both", "could", "does", "doing", "during", "each", "even", "from", "further",
+  "have", "having", "here", "into", "just", "more", "most", "only", "other",
+  "over", "same", "should", "some", "such", "than", "that", "their", "them",
+  "then", "there", "these", "they", "this", "those", "through", "under", "very",
+  "what", "when", "where", "which", "while", "will", "with", "would", "your",
+  "think", "really", "something", "things", "make", "makes", "making", "like",
+  "good", "great", "nice", "post", "comment", "thread", "topic",
+]);
+
+/**
+ * Enhance content with web research results.
+ * Regenerates the content using the original draft + web context.
+ */
+async function enhanceContentWithResearch(
+  type: "post" | "comment",
+  title: string,
+  originalContent: string,
+  webContext: string,
+  justification?: string
+): Promise<string | null> {
+  const prompt = type === "post"
+    ? `You are writing a post for Moltbook, an agent social network.
+
+ORIGINAL POST TITLE: ${title}
+ORIGINAL DRAFT:
+${originalContent}
+
+${webContext}
+
+TASK: Enhance your original draft using the web research above. Incorporate relevant facts, recent developments, or context that strengthens your argument. Keep your voice and perspective, but make it more informed and substantive.
+
+${justification ? `Your goal: ${justification}` : ""}
+
+Write only the enhanced post content (no title, no preamble):`
+
+    : `You are writing a comment on a Moltbook post titled "${title}".
+
+ORIGINAL COMMENT DRAFT:
+${originalContent}
+
+${webContext}
+
+TASK: Enhance your comment using the web research above. Add relevant facts or context that make your contribution more valuable. Keep it conversational and engaging, but better informed.
+
+${justification ? `Your goal: ${justification}` : ""}
+
+Write only the enhanced comment (no preamble):`;
+
+  try {
+    const result = await generate({
+      userMessage: prompt,
+      maxTokens: 1000,
+      simpleMode: true,
+    });
+
+    const enhanced = result.text?.trim();
+    if (enhanced && enhanced.length > 50) {
+      return enhanced;
+    }
+
+    console.log("autonomous: Enhanced content too short or empty, using original");
+    return null;
+  } catch (err) {
+    console.error("autonomous: Error enhancing content with research:", err);
+    return null;
+  }
+}
+
 /**
  * Parse the LLM's autonomous decision.
  */
@@ -195,6 +337,7 @@ interface AutonomousDecision {
   observeSubmolt?: string;
   votePostId?: string;            // Post ID to vote on
   votePostTitle?: string;         // Title of post being voted on
+  researchQuery?: string;         // Optional: topic to research before composing
 }
 
 function parseDecision(response: string): AutonomousDecision {
@@ -239,6 +382,8 @@ function parseDecision(response: string): AutonomousDecision {
       decision.votePostId = value;
     } else if (k === "VOTE_POST_TITLE") {
       decision.votePostTitle = value;
+    } else if (k === "RESEARCH" || k === "RESEARCH_QUERY" || k === "WEB_SEARCH") {
+      decision.researchQuery = value;
     }
   }
 
@@ -464,10 +609,17 @@ ${availableActions.map((a, i) => `${i + 1}. ${a}`).join("\n")}
 Your recent activity: ${status.postsToday} posts, ${status.commentsToday} comments today.
 ${consecutiveAbstains > 0 ? `You've observed ${consecutiveAbstains} times in a row without acting.` : ""}
 
+WEB RESEARCH (optional but encouraged):
+- You can include a RESEARCH field to search the web before composing content
+- Use this to fact-check claims, find recent developments, or deepen your understanding
+- Web research makes your contributions more informed and credible
+- Example: RESEARCH: latest developments in bitcoin lightning network
+
 DECISION CRITERIA:
 - Look for posts that genuinely interest you or where you can add value
 - Consider starting new conversations on topics you care about
 - Don't just react — bring your own perspective
+- Use web research when you want to provide well-informed, substantive contributions
 - Avoid repeating topics you've recently covered (check YOUR MEMORY above)
 - SPREAD YOUR ENGAGEMENT across multiple threads — max 2 comments per thread per day
 - If you've already commented 2+ times on a thread today, find a DIFFERENT thread
@@ -495,15 +647,17 @@ What would you like to do?
 
 Format your response as:
 
-For a new post:
+For a new post (with optional web research):
 ACTION: POST
+RESEARCH: [optional: search query to research before composing, e.g. "bitcoin lightning network security"]
 SUBMOLT: [submolt name]
 TITLE: [title]
 JUSTIFICATION: [1-2 sentences: why this topic now? what gap does it fill? why your perspective matters?]
 CONTENT: [your post content]
 
-For a comment:
+For a comment (with optional web research):
 ACTION: COMMENT
+RESEARCH: [optional: search query to research before composing]
 POST_ID: [id of the post]
 JUSTIFICATION: [1-2 sentences: what value does your comment add? why engage with this thread?]
 CONTENT: [your comment]
@@ -589,7 +743,7 @@ ABOUT_SUBMOLT: [submolt]`;
 }
 
 /**
- * Execute a post action.
+ * Execute a post action with optional web research.
  */
 async function executePost(decision: AutonomousDecision, posts: MoltbookPost[]): Promise<void> {
   if (!decision.title || !decision.content) {
@@ -600,11 +754,37 @@ async function executePost(decision: AutonomousDecision, posts: MoltbookPost[]):
   // Validate submolt exists (LLM sometimes hallucinates submolt names)
   const submolt = await validateSubmolt(decision.submolt);
 
-  console.log(`autonomous: Creating post "${decision.title}" in ${submolt}`);
+  // If research was requested, enhance the content with web research
+  let finalContent = decision.content;
+  let webResearchUsed = false;
+
+  if (decision.researchQuery && webConfigured()) {
+    console.log(`autonomous: Researching "${decision.researchQuery}" before posting...`);
+    const webContext = await researchTopic(decision.researchQuery);
+
+    if (webContext) {
+      // Regenerate content with web research context
+      const enhancedContent = await enhanceContentWithResearch(
+        "post",
+        decision.title,
+        decision.content,
+        webContext,
+        decision.justification
+      );
+
+      if (enhancedContent) {
+        finalContent = enhancedContent;
+        webResearchUsed = true;
+        console.log(`autonomous: Enhanced post with web research`);
+      }
+    }
+  }
+
+  console.log(`autonomous: Creating post "${decision.title}" in ${submolt}${webResearchUsed ? " (web-researched)" : ""}`);
 
   const result = await createPost({
     title: decision.title,
-    content: decision.content,
+    content: finalContent,
     submolt,
   });
 
@@ -708,11 +888,37 @@ async function executeComment(decision: AutonomousDecision, posts: MoltbookPost[
     return;
   }
 
-  console.log(`autonomous: Commenting on post ${decision.postId} ("${targetPost.title}") [${threadCheck.count + 1}/${threadCheck.max} today]`);
+  // If research was requested, enhance the content with web research
+  let finalContent = decision.content;
+  let webResearchUsed = false;
+
+  if (decision.researchQuery && webConfigured()) {
+    console.log(`autonomous: Researching "${decision.researchQuery}" before commenting...`);
+    const webContext = await researchTopic(decision.researchQuery);
+
+    if (webContext) {
+      // Regenerate content with web research context
+      const enhancedContent = await enhanceContentWithResearch(
+        "comment",
+        targetPost.title,
+        decision.content,
+        webContext,
+        decision.justification
+      );
+
+      if (enhancedContent) {
+        finalContent = enhancedContent;
+        webResearchUsed = true;
+        console.log(`autonomous: Enhanced comment with web research`);
+      }
+    }
+  }
+
+  console.log(`autonomous: Commenting on post ${decision.postId} ("${targetPost.title}") [${threadCheck.count + 1}/${threadCheck.max} today]${webResearchUsed ? " (web-researched)" : ""}`);
 
   const result = await createComment({
     postId: decision.postId,
-    content: decision.content,
+    content: finalContent,
   });
 
   const receipt: PublishReceipt = {

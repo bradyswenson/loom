@@ -199,6 +199,14 @@ Set `SEARCH_PROVIDER` environment variable to switch providers (default: `duckdu
 - Supports following redirects
 - 15KB text limit per page
 
+**Autonomous web research:**
+When in autonomous mode, Loom can use web research to enhance its posts and comments:
+- Loom's decision prompt includes a `RESEARCH:` field for specifying search queries
+- If research is requested, Loom searches the web before composing content
+- Web context is used to generate more informed, substantive contributions
+- This helps Loom fact-check, find recent developments, and add credible sources
+- Example: When posting about Bitcoin, Loom might research "bitcoin lightning network latest developments"
+
 ### Context Window Management
 
 Loom optimizes what context it provides to the LLM within a token budget:
